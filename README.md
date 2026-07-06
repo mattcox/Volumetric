@@ -1,4 +1,4 @@
-# Volumetric
+# 🧊 Volumetric
 Volumetric is an open-source package of volumetric data structures and algorithms for the Swift programming language.
 
 ## Contents
