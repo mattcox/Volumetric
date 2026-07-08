@@ -35,21 +35,14 @@ jobs:
         run: |
           swift package resolve;
 
-          xcodebuild docbuild -scheme Volumetric-Package -derivedDataPath /tmp/docbuild -destination 'generic/platform=macOS';
-
-          $(xcrun --find docc) merge \
-            /tmp/docbuild/Build/Products/Debug/Core.doccarchive \
-            /tmp/docbuild/Build/Products/Debug/BVH.doccarchive \
-            /tmp/docbuild/Build/Products/Debug/Volumetric.doccarchive \
-            --synthesized-landing-page-name 'Volumetric' \
-            --output-path /tmp/Volumetric.doccarchive;
+          xcodebuild docbuild -scheme Volumetric -derivedDataPath /tmp/docbuild -destination 'generic/platform=macOS';
 
           $(xcrun --find docc) process-archive \
-            transform-for-static-hosting /tmp/Volumetric.doccarchive \
+            transform-for-static-hosting /tmp/docbuild/Build/Products/Debug/Volumetric.doccarchive \
             --output-path docs \
             --hosting-base-path 'Volumetric';
 
-          echo "<script>window.location.href += \"/documentation\"</script>" > docs/index.html;
+          echo "<script>window.location.href += \"/documentation/volumetric\"</script>" > docs/index.html;
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
