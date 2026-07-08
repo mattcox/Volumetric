@@ -72,6 +72,35 @@ func sizeIsExtentDifference() {
 }
 
 @Test
+func volumeIsProductOfExtents() {
+	let bounds = Bounds(min: Vector3(0.0, 0.0, 0.0), max: Vector3(2.0, 4.0, 6.0))
+	#expect(bounds.volume == 48.0)
+}
+
+@Test
+func surfaceAreaSumsTheFaces() {
+	// 2 * (wh + hd + wd) for extents 2, 4, 6 => 2 * (8 + 24 + 12) = 88.
+	let bounds = Bounds(min: Vector3(0.0, 0.0, 0.0), max: Vector3(2.0, 4.0, 6.0))
+	#expect(bounds.surfaceArea == 88.0)
+}
+
+@Test
+func surfaceAreaReducesToPerimeterInTwoDimensions() {
+	// In two dimensions the boundary content is the perimeter: 2 * (w + h).
+	let bounds = Bounds(min: Vector2(0.0, 0.0), max: Vector2(3.0, 5.0))
+	#expect(bounds.surfaceArea == 16.0)
+	#expect(bounds.volume == 15.0)		// the "volume" is the 2D area
+}
+
+@Test
+func measuresApplyToAnyBoundable() {
+	// The measures live on Boundable, so a custom conformer gets them too.
+	let shape = TestBound(min: Vector3(1.0, 1.0, 1.0), max: Vector3(3.0, 4.0, 5.0))
+	#expect(shape.volume == 24.0)			// 2 * 3 * 4
+	#expect(shape.surfaceArea == 52.0)		// 2 * (6 + 12 + 8)
+}
+
+@Test
 func testPositionInsideAndOutside() {
 	let bounds = Bounds(min: Vector3(0.0, 0.0, 0.0), max: Vector3(1.0, 1.0, 1.0))
 	#expect(bounds.test(position: Vector3(0.5, 0.5, 0.5)))

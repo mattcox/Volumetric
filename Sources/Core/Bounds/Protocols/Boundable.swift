@@ -61,9 +61,48 @@ extension Boundable where Vector: VectorMath {
 	public var center: Vector {
 		((self.max - self.min) / 2) + self.min
 	}
-	
+
 	public var size: Vector {
 		self.max - self.min
+	}
+}
+
+extension Boundable {
+/// The volume enclosed by the bounds.
+///
+/// This is the N-dimensional content of the box — the product of its
+/// extents along every dimension. In two dimensions this is the area, and
+/// in three dimensions the volume.
+///
+	public var volume: Vector.Component {
+		var result: Vector.Component = 1
+		for i in 0..<Vector.count {
+			result *= self.max[i] - self.min[i]
+		}
+		return result
+	}
+
+/// The surface area of the bounds.
+///
+/// This is the N-dimensional boundary content of the box — twice the sum,
+/// over each dimension, of the product of the extents in every _other_
+/// dimension. In three dimensions this is the familiar surface area
+/// `2(wh + hd + wd)`; in two dimensions it reduces to the perimeter.
+///
+	public var surfaceArea: Vector.Component {
+		let extents = (0..<Vector.count).map {
+			self.max[$0] - self.min[$0]
+		}
+
+		var total: Vector.Component = 0
+		for i in extents.indices {
+			var face: Vector.Component = 1
+			for j in extents.indices where j != i {
+				face *= extents[j]
+			}
+			total += face
+		}
+		return 2 * total
 	}
 }
 
