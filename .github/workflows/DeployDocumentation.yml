@@ -42,7 +42,7 @@ jobs:
             --output-path docs \
             --hosting-base-path 'Volumetric';
 
-          echo "<script>window.location.href += \"/documentation/volumetric\"</script>" > docs/index.html;
+          echo "<script>window.location.href = window.location.href.replace(/\/?\$/, \"/documentation/volumetric/\")</script>" > docs/index.html;
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
