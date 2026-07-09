@@ -8,3 +8,4 @@
 
 @_exported import BVH
 @_exported import Core
+@_exported import Grid
