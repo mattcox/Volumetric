@@ -199,7 +199,9 @@ private func printTable(count: Int, rayCount: Int) {
 		("LinearBVH",   { evaluate(LinearBVH(), elements: $0, bounds: $1, rays: $2, runs: $3) }),
 		("MedianSplit", { evaluate(MedianSplit(), elements: $0, bounds: $1, rays: $2, runs: $3) }),
 		("BinnedSAH",   { evaluate(BinnedSAH(), elements: $0, bounds: $1, rays: $2, runs: $3) }),
+		("AAC-Fast·1T", { evaluate(AAC(delta: 4, epsilon: 0.2, parallel: false), elements: $0, bounds: $1, rays: $2, runs: $3) }),
 		("AAC-Fast",    { evaluate(AAC(delta: 4, epsilon: 0.2), elements: $0, bounds: $1, rays: $2, runs: $3) }),
+		("AAC-HQ·1T",   { evaluate(AAC(delta: 20, epsilon: 0.1, parallel: false), elements: $0, bounds: $1, rays: $2, runs: $3) }),
 		("AAC-HQ",      { evaluate(AAC(delta: 20, epsilon: 0.1), elements: $0, bounds: $1, rays: $2, runs: $3) })
 	]
 

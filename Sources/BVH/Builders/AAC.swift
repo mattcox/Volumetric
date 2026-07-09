@@ -8,6 +8,8 @@
 
 import Cartesian
 import Core
+import Dispatch
+import Foundation
 import MortonCode
 import RealModule
 
@@ -96,6 +98,17 @@ public struct AAC: BVHBuilder {
 ///
 	public var maximumLeafSize: Int
 
+/// Whether the two independent halves of each Morton bisection are clustered
+/// in parallel.
+///
+/// The downward phase splits the primitive range into two spans whose
+/// bottom-up clustering shares only read-only data, so the recursion forks
+/// cleanly across cores near the top of the tree. Disabling this forces the
+/// serial path, which is otherwise identical — the resulting hierarchy is
+/// bit-for-bit the same either way. Defaults to `true`.
+///
+	public var parallel: Bool
+
 /// Initialize the agglomerative clustering builder.
 ///
 /// The defaults correspond to the paper's high-quality configuration.
@@ -106,12 +119,15 @@ public struct AAC: BVHBuilder {
 ///   - epsilon: The reduction-function exponent offset. Defaults to `0.1`.
 ///   - maximumLeafSize: The maximum number of primitives permitted in a leaf
 ///     node. Clamped to at least one. Defaults to four.
+///   - parallel: Whether to cluster independent bisection halves in parallel.
+///     Defaults to `true`.
 ///
 	@inlinable
-	public init(delta: Int = 20, epsilon: Double = 0.1, maximumLeafSize: Int = 4) {
+	public init(delta: Int = 20, epsilon: Double = 0.1, maximumLeafSize: Int = 4, parallel: Bool = true) {
 		self.delta = Swift.max(2, delta)
 		self.epsilon = epsilon
 		self.maximumLeafSize = Swift.max(1, maximumLeafSize)
+		self.parallel = parallel
 	}
 
 	@inlinable
@@ -121,7 +137,17 @@ public struct AAC: BVHBuilder {
 		typealias Tree = BVH<Element>.BuildTree
 		typealias Node = ClusterNode<Vector>
 
-		let elementBounds = elements.map { Bounds<Vector>($0) }
+		// Copied out of `self` so the concurrently-executed `buildTree` captures
+		// a plain value rather than the (non-`Sendable`) builder.
+		//
+		let delta = self.delta
+
+		// `Bounds<Vector>` is not statically `Sendable` for an arbitrary
+		// `VectorMath`, but the parallel halves only ever read this array, so the
+		// capture is safe. `sortedElements`/`sortedCodes` are immutable and
+		// trivially `Sendable`.
+		//
+		nonisolated(unsafe) let elementBounds = elements.map { Bounds<Vector>($0) }
 
 		// Quantize each centroid into the root bounds and interleave it into a
 		// Morton code, guarding zero-extent axes against a divide by zero.
@@ -137,8 +163,7 @@ public struct AAC: BVHBuilder {
 			return (try? MortonCode<UInt64>(coordinates))?.value ?? 0
 		}
 
-		var sortedElements = Array(elements.indices)
-		sortedElements.sort {
+		let sortedElements = elements.indices.sorted {
 			codes[$0] < codes[$1]
 		}
 		let sortedCodes = sortedElements.map {
@@ -151,7 +176,7 @@ public struct AAC: BVHBuilder {
 		//
 		let alpha = 0.5 - epsilon
 		let c = Double.pow(Double(delta), 0.5 + epsilon) / 2
-		func reduction(_ count: Int) -> Int {
+		@Sendable func reduction(_ count: Int) -> Int {
 			let target = Int((c * Double.pow(Double(count), alpha)).rounded())
 			return Swift.max(1, Swift.min(count, target))
 		}
@@ -162,7 +187,7 @@ public struct AAC: BVHBuilder {
 		// duplicates and continues the bisection once the Morton bits are
 		// exhausted.
 		//
-		func findSplit(_ first: Int, _ last: Int) -> Int {
+		@Sendable func findSplit(_ first: Int, _ last: Int) -> Int {
 			let firstCode = sortedCodes[first]
 			let lastCode = sortedCodes[last]
 			guard firstCode != lastCode else {
@@ -195,7 +220,7 @@ public struct AAC: BVHBuilder {
 		// optimizations; correctness does not depend on them, and cluster sets
 		// here are small.
 		//
-		func combineClusters(_ clusters: inout [Node], target: Int) {
+		@Sendable func combineClusters(_ clusters: inout [Node], target: Int) {
 			while clusters.count > target {
 				var best = Component.infinity
 				var left = 0
@@ -217,11 +242,33 @@ public struct AAC: BVHBuilder {
 			}
 		}
 
+		// The two bisection halves are clustered independently, so the recursion
+		// forks across cores near the top of the tree. Forking is capped by
+		// depth — enough tasks to fill the machine with slack for the uneven
+		// split, no more — and disabled for small spans where the dispatch
+		// overhead would not pay for itself. Below either cutoff the halves run
+		// serially, producing a hierarchy identical to a fully serial build.
+		//
+		let maxForkDepth: Int = {
+			guard parallel else {
+				return 0
+			}
+			let cores = Swift.max(1, ProcessInfo.processInfo.activeProcessorCount)
+			var depth = 1		// slack for the uneven Morton split
+			var width = 1
+			while width < cores {
+				width <<= 1
+				depth += 1
+			}
+			return depth
+		}()
+		let parallelThreshold = 512
+
 		// The downward phase: bisect the Morton order until a span is small
 		// enough, then cluster bottom-up on the way back. Each call owns its
 		// clusters, sharing only read-only data with its sibling.
 		//
-		func buildTree(_ first: Int, _ last: Int) -> [Node] {
+		@Sendable func buildTree(_ first: Int, _ last: Int, _ depth: Int) -> [Node] {
 			let count = last - first + 1
 			if count < delta {
 				var clusters: [Node] = []
@@ -235,12 +282,37 @@ public struct AAC: BVHBuilder {
 			}
 
 			let split = findSplit(first, last)
-			var clusters = buildTree(first, split) + buildTree(split + 1, last)
+
+			let left: [Node]
+			let right: [Node]
+			if depth < maxForkDepth && count >= parallelThreshold {
+				// Evaluate the two halves concurrently, each writing to its own
+				// slot. No mutable state is shared, so the writes cannot race;
+				// the barrier at the end of `concurrentPerform` orders them
+				// before the results are read back.
+				//
+				var halves: [[Node]?] = [nil, nil]
+				halves.withUnsafeMutableBufferPointer { buffer in
+					let base = buffer.baseAddress!
+					DispatchQueue.concurrentPerform(iterations: 2) { index in
+						let span = index == 0 ? (first, split) : (split + 1, last)
+						(base + index).pointee = buildTree(span.0, span.1, depth + 1)
+					}
+				}
+				left = halves[0]!
+				right = halves[1]!
+			}
+			else {
+				left = buildTree(first, split, depth + 1)
+				right = buildTree(split + 1, last, depth + 1)
+			}
+
+			var clusters = left + right
 			combineClusters(&clusters, target: reduction(count))
 			return clusters
 		}
 
-		var roots = buildTree(0, elements.count - 1)
+		var roots = buildTree(0, elements.count - 1, 0)
 		combineClusters(&roots, target: 1)
 		let rootCluster = roots[0]
 
@@ -306,9 +378,10 @@ extension BVHBuilder where Self == AAC {
 ///   - epsilon: The reduction-function exponent offset.
 ///   - maximumLeafSize: The maximum number of primitives permitted in a
 ///     leaf node.
+///   - parallel: Whether to cluster independent bisection halves in parallel.
 ///
 	@inlinable
-	public static func aac(delta: Int = 20, epsilon: Double = 0.1, maximumLeafSize: Int = 4) -> AAC {
-		AAC(delta: delta, epsilon: epsilon, maximumLeafSize: maximumLeafSize)
+	public static func aac(delta: Int = 20, epsilon: Double = 0.1, maximumLeafSize: Int = 4, parallel: Bool = true) -> AAC {
+		AAC(delta: delta, epsilon: epsilon, maximumLeafSize: maximumLeafSize, parallel: parallel)
 	}
 }
