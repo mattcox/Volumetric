@@ -424,6 +424,177 @@ extension BVH: Closest {
 	}
 }
 
+extension BVH {
+/// Enumerate every element whose bounds lie within a radius of a point.
+///
+/// This is a broad-phase query: an element is reported when the nearest point
+/// of its bounds is within `radius` of `point` (inclusive). The hierarchy is
+/// traversed, skipping any subtree whose bounds fall entirely outside the
+/// ball, so only candidate leaves are visited. Elements are not reported in
+/// any particular order.
+///
+/// - Parameters:
+///   - radius: The radius of the query ball. Negative radii report nothing.
+///   - point: The centre of the query ball.
+///   - perform: A closure invoked with each element within range. Return
+///     `true` to continue, or `false` to stop enumeration.
+///
+	@inlinable
+	public func enumerate(within radius: Element.Vector.Component, of point: Element.Vector, _ perform: (Element) -> Bool) {
+		guard radius >= 0 else {
+			return
+		}
+		let radiusSquared = radius * radius
+
+		var index = 0
+		while index < nodes.count {
+			let node = nodes[index]
+
+			// Skip the whole subtree if its bounds fall outside the ball.
+			//
+			guard node.bounds.squaredDistance(to: point) <= radiusSquared else {
+				index = node.escapeIndex
+				continue
+			}
+
+			if node.isLeaf {
+				for i in node.firstElement..<(node.firstElement + node.elementCount) {
+					let element = elements[i]
+					if Bounds(element).squaredDistance(to: point) <= radiusSquared {
+						guard perform(element) else {
+							return
+						}
+					}
+				}
+				index = node.escapeIndex
+			}
+			else {
+				index += 1
+			}
+		}
+	}
+
+/// Return every element whose bounds lie within a radius of a point.
+///
+/// A collecting convenience over ``enumerate(within:of:_:)``; see that method
+/// for the range semantics. The elements are returned in no particular order.
+///
+/// - Parameters:
+///   - radius: The radius of the query ball. Negative radii return nothing.
+///   - point: The centre of the query ball.
+///
+/// - Returns: The elements within range, in no particular order.
+///
+	@inlinable
+	public func elements(within radius: Element.Vector.Component, of point: Element.Vector) -> [Element] {
+		var result: [Element] = []
+		enumerate(within: radius, of: point) { element in
+			result.append(element)
+			return true
+		}
+		return result
+	}
+
+/// Return the `count` elements nearest to a point, ordered nearest first.
+///
+/// This is a broad-phase query: elements are ranked by the distance to their
+/// bounds. Fewer than `count` elements are returned only when the hierarchy
+/// holds fewer. This is the k-nearest generalization of ``closest(to:)``.
+///
+/// A bounded max-heap keeps the best candidates seen so far; once it is full,
+/// its root is the current worst kept, which prunes any subtree no nearer than
+/// it.
+///
+/// - Parameters:
+///   - count: The maximum number of elements to return. Must be non-negative.
+///   - point: The point to find the nearest elements to.
+///
+/// - Returns: Up to `count` elements ordered from nearest to farthest.
+///
+	@inlinable
+	public func nearest(_ count: Int, to point: Element.Vector) -> [Element] {
+		guard count > 0 else {
+			return []
+		}
+
+		// A bounded max-heap of the best candidates by squared bounds-distance.
+		// Once it holds `count` elements, `heap[0]` is the worst kept and bounds
+		// the remaining search.
+		//
+		var heap: [(distance: Element.Vector.Component, element: Element)] = []
+		heap.reserveCapacity(count)
+
+		func swim() {
+			var child = heap.count - 1
+			while child > 0 {
+				let parent = (child - 1) / 2
+				guard heap[child].distance > heap[parent].distance else {
+					break
+				}
+				heap.swapAt(child, parent)
+				child = parent
+			}
+		}
+
+		func sink() {
+			var parent = 0
+			while true {
+				let left = 2 * parent + 1
+				let right = left + 1
+				var largest = parent
+				if left < heap.count, heap[left].distance > heap[largest].distance {
+					largest = left
+				}
+				if right < heap.count, heap[right].distance > heap[largest].distance {
+					largest = right
+				}
+				guard largest != parent else {
+					break
+				}
+				heap.swapAt(parent, largest)
+				parent = largest
+			}
+		}
+
+		func consider(_ element: Element, _ distance: Element.Vector.Component) {
+			if heap.count < count {
+				heap.append((distance, element))
+				swim()
+			}
+			else if distance < heap[0].distance {
+				heap[0] = (distance, element)
+				sink()
+			}
+		}
+
+		var index = 0
+		while index < nodes.count {
+			let node = nodes[index]
+
+			// Once the heap is full, skip any subtree no nearer than the worst
+			// candidate currently kept.
+			//
+			if heap.count == count, node.bounds.squaredDistance(to: point) >= heap[0].distance {
+				index = node.escapeIndex
+				continue
+			}
+
+			if node.isLeaf {
+				for i in node.firstElement..<(node.firstElement + node.elementCount) {
+					let element = elements[i]
+					consider(element, Bounds(element).squaredDistance(to: point))
+				}
+				index = node.escapeIndex
+			}
+			else {
+				index += 1
+			}
+		}
+
+		return heap.sorted { $0.distance < $1.distance }.map(\.element)
+	}
+}
+
 extension BVH: Collection {
 	@inlinable
 	public var startIndex: Array<Element>.Index {
