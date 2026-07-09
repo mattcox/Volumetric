@@ -19,7 +19,8 @@ struct Benchmark: ParsableCommand {
 		commandName: "benchmark",
 		abstract: "Performance and quality benchmarks for Volumetric.",
 		subcommands: [
-			BVHBenchmark.self
+			BVHBenchmark.self,
+			GridBenchmark.self
 		]
 	)
 }

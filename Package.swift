@@ -92,6 +92,7 @@ let package = Package(
 				"Cartesian",
 				"Core",
 				"BVH",
+				"Grid",
 				.product(name: "ArgumentParser", package: "swift-argument-parser")
 			]
 		),
