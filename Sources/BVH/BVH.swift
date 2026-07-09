@@ -100,6 +100,28 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 	@usableFromInline
 	let elements: [Element]
 
+/// The permutation mapping each stored element slot back to its index in the
+/// original build sequence.
+///
+/// Retained so the hierarchy can be refit against fresh geometry supplied in
+/// the caller's original element order.
+///
+	@usableFromInline
+	let ordering: [Int]
+
+/// Initialize a hierarchy directly from its computed storage.
+///
+/// Used internally to produce a refit hierarchy that shares the topology of
+/// an existing one.
+///
+	@inlinable @usableFromInline
+	init(bounds: Bounds<Element.Vector>, nodes: [Node], elements: [Element], ordering: [Int]) {
+		self.bounds = bounds
+		self.nodes = nodes
+		self.elements = elements
+		self.ordering = ordering
+	}
+
 /// Initialize a hierarchy over a sequence of elements.
 ///
 /// If the sequence is empty, the initializer returns nil.
@@ -163,6 +185,82 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 
 		self.bounds = bounds
 		self.nodes = nodes
+		self.ordering = tree.ordering
+	}
+}
+
+extension BVH {
+/// Return a copy of the hierarchy refit to new element geometry.
+///
+/// Refitting preserves the existing topology — the same elements stay in the
+/// same leaves — and only recomputes bounding volumes bottom-up. It is an
+/// O(*n*) operation that skips the sort and clustering of a full build, which
+/// makes it well suited to animation where geometry deforms but its
+/// connectivity is stable. Because the tree structure was chosen for the
+/// original geometry, query quality degrades as elements move; rebuild once
+/// the fit has loosened too far.
+///
+/// The new elements must be supplied in the same order, and the same number,
+/// as the sequence the hierarchy was originally built from.
+///
+/// - Parameter newElements: The updated elements, indexed as at construction.
+///
+/// - Returns: A new hierarchy with identical topology and refit bounds.
+///
+	@inlinable
+	public func refitted(with newElements: [Element]) -> BVH {
+		precondition(newElements.count == ordering.count, "refit requires the same number of elements as the original build")
+
+		// Place the new elements into the stored, leaf-contiguous order.
+		//
+		var elements: [Element] = []
+		elements.reserveCapacity(ordering.count)
+		for original in ordering {
+			elements.append(newElements[original])
+		}
+
+		// Recompute every node's bounds bottom-up. Parents are stored ahead of
+		// their children, so a single reverse pass updates each child before its
+		// parent. A leaf unions its elements; an interior node unions its
+		// children, which are reached by walking the escape links from the node
+		// immediately following it.
+		//
+		var nodes = self.nodes
+		for index in stride(from: nodes.count - 1, through: 0, by: -1) {
+			if nodes[index].isLeaf {
+				let first = nodes[index].firstElement
+				var box = Bounds(elements[first])
+				for slot in (first + 1)..<(first + nodes[index].elementCount) {
+					box = box.union(with: Bounds(elements[slot]))
+				}
+				nodes[index].bounds = box
+			}
+			else {
+				let escape = nodes[index].escapeIndex
+				var child = index + 1
+				var box = nodes[child].bounds
+				while nodes[child].escapeIndex != escape {
+					child = nodes[child].escapeIndex
+					box = box.union(with: nodes[child].bounds)
+				}
+				nodes[index].bounds = box
+			}
+		}
+
+		return BVH(bounds: nodes[0].bounds, nodes: nodes, elements: elements, ordering: ordering)
+	}
+
+/// Refit the hierarchy in place to new element geometry.
+///
+/// This is the in-place form of ``refitted(with:)``: it preserves topology and
+/// recomputes bounds bottom-up in O(*n*). See that method for the constraints
+/// on `newElements` and the quality trade-offs of refitting.
+///
+/// - Parameter newElements: The updated elements, indexed as at construction.
+///
+	@inlinable
+	public mutating func refit(with newElements: [Element]) {
+		self = refitted(with: newElements)
 	}
 }
 

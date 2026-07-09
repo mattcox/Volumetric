@@ -98,6 +98,7 @@ private func makeRays(_ count: Int, in bounds: Element, seed: UInt64) -> [Ray<Ve
 
 private struct Stats {
 	var buildMilliseconds: Double
+	var refitMilliseconds: Double
 	var sahCost: Double
 	var nodes: Int
 	var leaves: Int
@@ -155,6 +156,23 @@ private func evaluate<B: BVHBuilder>(_ builder: B, elements: [Element], bounds: 
 		bvh = built
 	}
 
+	// Time a topology-preserving refit against rigidly displaced geometry,
+	// keeping the best of several runs. This is the O(n) alternative to a full
+	// rebuild when connectivity is stable (e.g. animation).
+	//
+	let moved = elements.map { Bounds(min: $0.min + Vec(repeating: 25), max: $0.max + Vec(repeating: 25)) }
+	var bestRefit = Double.infinity
+	if let bvh {
+		for _ in 0..<runs {
+			var refit: BVH<Element>?
+			let elapsed = clock.measure {
+				refit = bvh.refitted(with: moved)
+			}
+			bestRefit = Swift.min(bestRefit, milliseconds(elapsed))
+			_ = refit
+		}
+	}
+
 	// Structural quality from the intermediate tree.
 	//
 	let tree = builder.build(elements, bounds: bounds)
@@ -175,6 +193,7 @@ private func evaluate<B: BVHBuilder>(_ builder: B, elements: [Element], bounds: 
 
 	return Stats(
 		buildMilliseconds: bestBuild,
+		refitMilliseconds: bestRefit,
 		sahCost: structure.sah,
 		nodes: structure.nodes,
 		leaves: structure.leaves,
@@ -219,14 +238,15 @@ private func printTable(count: Int, rayCount: Int) {
 
 	print("")
 	print("Scene: \(count) primitives, \(rays.count) rays")
-	print(pad("builder", 13) + pad("build ms", 11, alignRight: true) + pad("SAH", 9, alignRight: true) + pad("tests/ray", 11, alignRight: true) + pad("nodes", 10, alignRight: true) + pad("mean leaf", 11, alignRight: true) + pad("depth", 8, alignRight: true))
-	print(String(repeating: "-", count: 73))
+	print(pad("builder", 13) + pad("build ms", 11, alignRight: true) + pad("refit ms", 11, alignRight: true) + pad("SAH", 9, alignRight: true) + pad("tests/ray", 11, alignRight: true) + pad("nodes", 10, alignRight: true) + pad("mean leaf", 11, alignRight: true) + pad("depth", 8, alignRight: true))
+	print(String(repeating: "-", count: 84))
 
 	for result in results {
 		let relativeSAH = baseline > 0 ? result.stats.sahCost / baseline : 1
 		print(
 			pad(result.name, 13) +
 			pad(format(result.stats.buildMilliseconds, 2), 11, alignRight: true) +
+			pad(format(result.stats.refitMilliseconds, 2), 11, alignRight: true) +
 			pad(format(relativeSAH, 2) + "x", 9, alignRight: true) +
 			pad(format(result.stats.testsPerRay, 2), 11, alignRight: true) +
 			pad(String(result.stats.nodes), 10, alignRight: true) +
