@@ -58,10 +58,12 @@ public protocol Boundable {
 }
 
 extension Boundable where Vector: VectorMath {
+	@inlinable
 	public var center: Vector {
 		((self.max - self.min) / 2) + self.min
 	}
 
+	@inlinable
 	public var size: Vector {
 		self.max - self.min
 	}
@@ -74,6 +76,7 @@ extension Boundable {
 /// extents along every dimension. In two dimensions this is the area, and
 /// in three dimensions the volume.
 ///
+	@inlinable
 	public var volume: Vector.Component {
 		var result: Vector.Component = 1
 		for i in 0..<Vector.count {
@@ -89,6 +92,7 @@ extension Boundable {
 /// dimension. In three dimensions this is the familiar surface area
 /// `2(wh + hd + wd)`; in two dimensions it reduces to the perimeter.
 ///
+	@inlinable
 	public var surfaceArea: Vector.Component {
 		let extents = (0..<Vector.count).map {
 			self.max[$0] - self.min[$0]
@@ -107,6 +111,7 @@ extension Boundable {
 }
 
 extension Boundable where Vector.Component: Comparable {
+	@inlinable
 	public func test(position: Vector) -> Bool {
 		for i in 0..<Vector.count {
 			if position[i] > self.max[i] || position[i] < self.min[i] {
@@ -116,6 +121,7 @@ extension Boundable where Vector.Component: Comparable {
 		return true
 	}
 	
+	@inlinable
 	public func test<T: Boundable>(bounds: T) -> Bool where T.Vector == Self.Vector {
 		for i in 0..<Vector.count {
 			if self.max[i] < bounds.min[i] || bounds.max[i] < self.min[i] {

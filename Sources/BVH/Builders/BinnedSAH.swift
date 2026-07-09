@@ -49,11 +49,13 @@ public struct BinnedSAH: BVHBuilder {
 ///   - binCount: The number of bins used along each axis when searching for
 ///     a split. Clamped to at least two. Defaults to twelve.
 ///
+	@inlinable
 	public init(maximumLeafSize: Int = 4, binCount: Int = 12) {
 		self.maximumLeafSize = Swift.max(1, maximumLeafSize)
 		self.binCount = Swift.max(2, binCount)
 	}
 
+	@inlinable
 	public func build<Element: Boundable>(_ elements: [Element], bounds: Bounds<Element.Vector>) -> BVH<Element>.BuildTree where Element.Vector: VectorMath, Element.Vector.Component: Real & SIMDScalar & BinaryFloatingPoint {
 		typealias Vector = Element.Vector
 		typealias Component = Vector.Component
@@ -226,6 +228,7 @@ extension BVHBuilder where Self == BinnedSAH {
 /// A builder that partitions primitives using a binned surface area
 /// heuristic.
 ///
+	@inlinable
 	public static var binnedSAH: BinnedSAH {
 		BinnedSAH()
 	}
@@ -239,6 +242,7 @@ extension BVHBuilder where Self == BinnedSAH {
 ///   - binCount: The number of bins used along each axis when searching for
 ///     a split.
 ///
+	@inlinable
 	public static func binnedSAH(maximumLeafSize: Int = 4, binCount: Int = 12) -> BinnedSAH {
 		BinnedSAH(maximumLeafSize: maximumLeafSize, binCount: binCount)
 	}

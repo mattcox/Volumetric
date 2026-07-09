@@ -41,10 +41,12 @@ public struct LinearBVH: BVHBuilder {
 ///   - maximumLeafSize: The maximum number of primitives permitted in a leaf
 ///     node. Clamped to at least one. Defaults to four.
 ///
+	@inlinable
 	public init(maximumLeafSize: Int = 4) {
 		self.maximumLeafSize = Swift.max(1, maximumLeafSize)
 	}
 
+	@inlinable
 	public func build<Element: Boundable>(_ elements: [Element], bounds: Bounds<Element.Vector>) -> BVH<Element>.BuildTree where Element.Vector: VectorMath, Element.Vector.Component: Real & SIMDScalar & BinaryFloatingPoint {
 		typealias Vector = Element.Vector
 		typealias Component = Vector.Component
@@ -151,6 +153,7 @@ extension BVHBuilder where Self == LinearBVH {
 /// A builder that orders primitives along a Morton curve and builds a radix
 /// tree over the sorted codes.
 ///
+	@inlinable
 	public static var linearBVH: LinearBVH {
 		LinearBVH()
 	}
@@ -162,6 +165,7 @@ extension BVHBuilder where Self == LinearBVH {
 ///   - maximumLeafSize: The maximum number of primitives permitted in a
 ///     leaf node.
 ///
+	@inlinable
 	public static func linearBVH(maximumLeafSize: Int) -> LinearBVH {
 		LinearBVH(maximumLeafSize: maximumLeafSize)
 	}

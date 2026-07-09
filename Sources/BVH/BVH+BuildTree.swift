@@ -52,6 +52,7 @@ extension BVH {
 	///     list of elements.
 	///   - root: The index of the root node within `nodes`.
 	///
+		@inlinable
 		public init(nodes: [Node], ordering: [Int], root: Int) {
 			self.nodes = nodes
 			self.ordering = ordering
@@ -80,6 +81,7 @@ extension BVH {
 		///   - bounds: The bounds enclosing this node's subtree.
 		///   - content: The content of the node.
 		///
+			@inlinable
 			public init(bounds: Bounds<Element.Vector>, content: Content) {
 				self.bounds = bounds
 				self.content = content

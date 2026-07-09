@@ -24,8 +24,33 @@ import RealModule
 /// conditionally, so the bounds remains usable, if limited, over any vector.
 ///
 public struct Bounds<Vector: VectorProtocol> {
-	private(set) public var min: Vector
-	private(set) public var max: Vector
+	@usableFromInline
+	var _min: Vector
+
+	@usableFromInline
+	var _max: Vector
+
+/// The minimum extreme of the bounds.
+///
+/// The extremes are always sorted, so `min` is component-wise less than or
+/// equal to `max`. The setter is deliberately not exposed, so this invariant
+/// cannot be broken from outside the module.
+///
+	@inlinable
+	public var min: Vector {
+		_min
+	}
+
+/// The maximum extreme of the bounds.
+///
+/// The extremes are always sorted, so `max` is component-wise greater than
+/// or equal to `min`. The setter is deliberately not exposed, so this
+/// invariant cannot be broken from outside the module.
+///
+	@inlinable
+	public var max: Vector {
+		_max
+	}
 }
 
 extension Bounds {
@@ -34,7 +59,8 @@ extension Bounds {
 /// A bounds across _n_ dimensions has _2^n_ corners, formed by every
 /// combination of the minimum and maximum extreme across each axis.
 ///
-	private var corners: [Vector] {
+	@inlinable @usableFromInline
+	var corners: [Vector] {
 		let dimensions = Vector.count
 
 		var result: [Vector] = []
@@ -62,9 +88,10 @@ extension Bounds where Vector: VectorMath {
 ///   - min: The minimum extreme used to initialize the bounds.
 ///   - max: The maximum extreme used to initialize the bounds.
 ///
+	@inlinable
 	public init(min: Vector, max: Vector) {
-		self.min = Vector.min(min, max)
-		self.max = Vector.max(min, max)
+		self._min = Vector.min(min, max)
+		self._max = Vector.max(min, max)
 	}
 
 /// Initialize the bounds from a single position.
@@ -75,6 +102,7 @@ extension Bounds where Vector: VectorMath {
 /// - Parameters:
 ///   - position: The position to insert into the bounds.
 ///
+	@inlinable
 	public init(_ position: Vector) {
 		self.init(min: position, max: position)
 	}
@@ -88,6 +116,7 @@ extension Bounds where Vector: VectorMath {
 /// - Parameters:
 ///   - positions: The sequence of positions used to initialize the bounds.
 ///
+	@inlinable
 	public init?<T: Sequence>(_ positions: T) where T.Element == Vector {
 		var iterator = positions.makeIterator()
 
@@ -108,6 +137,7 @@ extension Bounds where Vector: VectorMath {
 /// - Parameters:
 ///   - bounds: The bounds used to initialize this object.
 ///
+	@inlinable
 	public init<T: Boundable>(_ bounds: T) where T.Vector == Vector {
 		self.init(min: bounds.min, max: bounds.max)
 	}
@@ -122,6 +152,7 @@ extension Bounds where Vector: VectorMath {
 ///   - boundables: The sequence of boundables used to initialize the
 ///     bounds.
 ///
+	@inlinable
 	public init?<T: Sequence>(_ boundables: T) where T.Element: Boundable, T.Element.Vector == Vector {
 		var iterator = boundables.makeIterator()
 
@@ -148,6 +179,7 @@ extension Bounds where Vector: VectorMath {
 ///
 /// - Returns: A new bounds encapsulating both input Boundables.
 ///
+	@inlinable
 	public static func + <T: Boundable>(lhs: Self, rhs: T) -> Self where T.Vector == Vector {
 		Bounds(
 			min: Vector.min(lhs.min, rhs.min),
@@ -164,6 +196,7 @@ extension Bounds where Vector: VectorMath {
 ///
 /// - Returns: A new bounds encapsulating both input Boundables.
 ///
+	@inlinable
 	public static func + <T: Boundable>(lhs: T, rhs: Self) -> Self where T.Vector == Vector {
 		Bounds(
 			min: Vector.min(lhs.min, rhs.min),
@@ -178,9 +211,10 @@ extension Bounds where Vector: VectorMath {
 ///   - lhs: The first bounds in the addition.
 ///   - rhs: The second Boundable in the addition.
 ///
+	@inlinable
 	public static func += <T: Boundable>(lhs: inout Self, rhs: T) where T.Vector == Vector {
-		lhs.min = Vector.min(lhs.min, rhs.min)
-		lhs.max = Vector.max(lhs.max, rhs.max)
+		lhs._min = Vector.min(lhs.min, rhs.min)
+		lhs._max = Vector.max(lhs.max, rhs.max)
 	}
 
 /// Add a position vector to a bounds, returning a new bounds that
@@ -193,6 +227,7 @@ extension Bounds where Vector: VectorMath {
 /// - Returns: A new bounds encapsulating both the bounds and the position
 ///   vector.
 ///
+	@inlinable
 	public static func + (lhs: Self, rhs: Vector) -> Self {
 		Bounds(
 			min: Vector.min(lhs.min, rhs),
@@ -210,6 +245,7 @@ extension Bounds where Vector: VectorMath {
 /// - Returns: A new bounds encapsulating both the bounds and the position
 ///   vector.
 ///
+	@inlinable
 	public static func + (lhs: Vector, rhs: Self) -> Self {
 		Bounds(
 			min: Vector.min(lhs, rhs.min),
@@ -224,9 +260,10 @@ extension Bounds where Vector: VectorMath {
 ///   - lhs: The bounds in the addition.
 ///   - rhs: The position vector in the addition.
 ///
+	@inlinable
 	public static func += (lhs: inout Self, rhs: Vector) {
-		lhs.min = Vector.min(lhs.min, rhs)
-		lhs.max = Vector.max(lhs.max, rhs)
+		lhs._min = Vector.min(lhs.min, rhs)
+		lhs._max = Vector.max(lhs.max, rhs)
 	}
 
 /// Inflate the bounds by the specified scalar amount.
@@ -238,8 +275,8 @@ extension Bounds where Vector: VectorMath {
 ///   - amount: The scalar amount to inflate the bounds by.
 ///
 	mutating public func inflate(by amount: Vector.Component) {
-		min -= amount
-		max += amount
+		_min -= amount
+		_max += amount
 	}
 
 /// Inflate the bounds by the specified scalar amount.
@@ -252,6 +289,7 @@ extension Bounds where Vector: VectorMath {
 ///
 /// - Returns: The inflated bounds.
 ///
+	@inlinable
 	public func inflated(by amount: Vector.Component) -> Self {
 		Bounds(min: min - amount, max: max + amount)
 	}
@@ -277,6 +315,7 @@ extension Bounds where Vector: VectorMath {
 ///
 /// - Returns: The deflated bounds.
 ///
+	@inlinable
 	public func deflated(by amount: Vector.Component) -> Self {
 		Bounds(min: min + amount, max: max - amount)
 	}
@@ -289,6 +328,7 @@ extension Bounds where Vector: VectorMath {
 ///
 /// - Returns: A new bounds encapsulating both bounds.
 ///
+	@inlinable
 	public func union<T: Boundable>(with other: T) -> Self where T.Vector == Vector {
 		Bounds(
 			min: Vector.min(self.min, other.min),
@@ -309,6 +349,7 @@ extension Bounds where Vector: VectorMath, Vector.Component: Comparable {
 /// - Returns: A new bounds describing the intersection, or nil if the two do
 ///   not overlap.
 ///
+	@inlinable
 	public func intersection<T: Boundable>(with other: T) -> Self? where T.Vector == Vector {
 		let minimum = Vector.max(self.min, other.min)
 		let maximum = Vector.min(self.max, other.max)
@@ -325,15 +366,19 @@ extension Bounds where Vector: VectorMath, Vector.Component: Comparable {
 
 extension Bounds: Blendable where Vector: Blendable {
 	public static func blend(from: Self, to: Self, by amount: Vector.Blend) -> Self {
+		// Blending two already-sorted bounds yields a sorted result, so the
+		// non-sorting memberwise initializer is used directly.
+		//
 		Bounds(
-			min: Vector.blend(from: from.min, to: to.min, by: amount),
-			max: Vector.blend(from: from.max, to: to.max, by: amount)
+			_min: Vector.blend(from: from.min, to: to.min, by: amount),
+			_max: Vector.blend(from: from.max, to: to.max, by: amount)
 		)
 	}
 
+	@inlinable
 	public mutating func blend(to other: Self, by amount: Vector.Blend) {
-		min.blend(to: other.min, by: amount)
-		max.blend(to: other.max, by: amount)
+		_min.blend(to: other.min, by: amount)
+		_max.blend(to: other.max, by: amount)
 	}
 }
 
@@ -342,6 +387,7 @@ extension Bounds: Boundable where Vector: VectorMath, Vector.Component: Comparab
 }
 
 extension Bounds: Closest where Vector: VectorMath, Vector.Component: Comparable {
+	@inlinable
 	public func closest(to element: Vector) -> Vector? {
 		var result = element
 		for i in 0..<Vector.count {
@@ -366,6 +412,7 @@ extension Bounds where Vector.Component: Comparable {
 ///
 /// - Returns: The squared distance from the bounds to the point.
 ///
+	@inlinable
 	public func squaredDistance(to point: Vector) -> Vector.Component {
 		var total = Vector.Component.zero
 		for i in 0..<Vector.count {
@@ -387,6 +434,7 @@ extension Bounds where Vector.Component: Real {
 ///
 /// - Returns: The distance from the bounds to the point.
 ///
+	@inlinable
 	public func distance(to point: Vector) -> Vector.Component {
 		squaredDistance(to: point).squareRoot()
 	}
@@ -397,6 +445,7 @@ extension Bounds: Codable where Vector: Codable {
 }
 
 extension Bounds: CustomStringConvertible where Vector: CustomStringConvertible {
+	@inlinable
 	public var description: String {
 		"Bounds(min: \(min), max: \(max))"
 	}
@@ -411,7 +460,8 @@ extension Bounds: Hashable where Vector: Hashable {
 }
 
 extension Bounds: RayIntersectable where Vector: VectorMath, Vector.Component: Real {
-	private static func intersectSlab(origin: Vector.Component, inverseDirection: Vector.Component, min: Vector.Component, max: Vector.Component, minimumParameter: inout Vector.Component, maximumParameter: inout Vector.Component) -> Bool {
+	@inlinable @usableFromInline
+	static func intersectSlab(origin: Vector.Component, inverseDirection: Vector.Component, min: Vector.Component, max: Vector.Component, minimumParameter: inout Vector.Component, maximumParameter: inout Vector.Component) -> Bool {
 		var parameter0 = (min - origin) * inverseDirection
 		var parameter1 = (max - origin) * inverseDirection
 
@@ -425,6 +475,7 @@ extension Bounds: RayIntersectable where Vector: VectorMath, Vector.Component: R
 		return minimumParameter <= maximumParameter
 	}
 
+	@inlinable
 	public func intersects(ray: Ray<Vector>) -> ClosedRange<Vector.Component>? {
 		var minimumParameter = -Vector.Component.infinity
 		var maximumParameter =  Vector.Component.infinity
@@ -451,6 +502,7 @@ extension Bounds: Sendable where Vector: Sendable {
 extension Bounds: Transformable2D where Vector: Transformable2D & VectorMath {
 	public typealias Scalar = Vector.Scalar
 
+	@inlinable
 	public mutating func transform<T: Transform2Protocol>(by transform: T) where T.Component == Vector.Scalar {
 		self = self.transformed(by: transform)
 	}
@@ -466,6 +518,7 @@ extension Bounds: Transformable2D where Vector: Transformable2D & VectorMath {
 ///
 /// - Returns: The transformed bounds.
 ///
+	@inlinable
 	public func transformed<T: Transform2Protocol>(by transform: T) -> Bounds where T.Component == Vector.Scalar {
 		let transformedCorners = corners.map {
 			$0.transformed(by: transform)
@@ -485,6 +538,7 @@ extension Bounds: Transformable2D where Vector: Transformable2D & VectorMath {
 extension Bounds: Transformable3D where Vector: Transformable3D & VectorMath {
 	public typealias Scalar = Vector.Scalar
 
+	@inlinable
 	public mutating func transform<T: Transform3Protocol>(by transform: T) where T.Component == Vector.Scalar {
 		self = self.transformed(by: transform)
 	}
@@ -500,6 +554,7 @@ extension Bounds: Transformable3D where Vector: Transformable3D & VectorMath {
 ///
 /// - Returns: The transformed bounds.
 ///
+	@inlinable
 	public func transformed<T: Transform3Protocol>(by transform: T) -> Bounds where T.Component == Vector.Scalar {
 		let transformedCorners = corners.map {
 			$0.transformed(by: transform)

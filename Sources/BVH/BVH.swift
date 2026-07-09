@@ -26,9 +26,11 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 /// (the node to jump to when its subtree is skipped or fully processed),
 /// which makes traversal stackless.
 ///
-	internal struct Node {
+	@usableFromInline
+	struct Node {
 	/// The bounds enclosing this node's subtree.
 	///
+		@usableFromInline
 		var bounds: Bounds<Element.Vector>
 
 	/// The index of this node's first element within the hierarchy's stored
@@ -37,6 +39,7 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 	/// Only meaningful for leaf nodes, where `elementCount` is greater than
 	/// zero.
 	///
+		@usableFromInline
 		var firstElement: Int
 
 	/// The number of elements referenced by this node.
@@ -44,6 +47,7 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 	/// A count of zero marks an interior node, whose first child is the
 	/// node immediately following it in storage.
 	///
+		@usableFromInline
 		var elementCount: Int
 
 	/// The index of the next node to visit once this node's subtree is
@@ -52,10 +56,12 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 	/// For the root this is the total node count, marking the end of a
 	/// traversal.
 	///
+		@usableFromInline
 		var escapeIndex: Int
 
 	/// A boolean indicating whether this node is a leaf.
 	///
+		@inlinable @usableFromInline
 		var isLeaf: Bool {
 			elementCount > 0
 		}
@@ -70,6 +76,7 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 	///   - escapeIndex: The index of the next node to visit once this node's
 	///     subtree is skipped or fully processed.
 	///
+		@inlinable @usableFromInline
 		init(bounds: Bounds<Element.Vector>, firstElement: Int, elementCount: Int, escapeIndex: Int) {
 			self.bounds = bounds
 			self.firstElement = firstElement
@@ -80,15 +87,18 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 
 /// The bounding box of all elements in the the BVH.
 ///
-	internal let bounds: Bounds<Element.Vector>
+	@usableFromInline
+	let bounds: Bounds<Element.Vector>
 	
 /// An array of nodes describing the topology of the BVH.
 ///
-	internal let nodes: [Node]
+	@usableFromInline
+	let nodes: [Node]
 	
 /// An array of all elements stored in the BVH.
 ///
-	internal let elements: [Element]
+	@usableFromInline
+	let elements: [Element]
 
 /// Initialize a hierarchy over a sequence of elements.
 ///
@@ -98,6 +108,7 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 ///   - sequence: The elements to build the hierarchy over.
 ///   - builder: The strategy used to build the hierarchy.
 ///
+	@inlinable
 	public init?<T: Sequence>(_ sequence: T, using builder: some BVHBuilder) where T.Element == Element {
 		let elements = Array(sequence)
 		guard elements.isEmpty == false else {
@@ -156,10 +167,12 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 }
 
 extension BVH: Boundable {
+	@inlinable
 	public var min: Element.Vector {
 		bounds.min
 	}
 
+	@inlinable
 	public var max: Element.Vector {
 		bounds.max
 	}
@@ -178,6 +191,7 @@ extension BVH: BoundsEnumerable {
 ///   - perform: A closure invoked with each overlapping element. Return
 ///     `true` to continue, or `false` to stop enumeration.
 ///
+	@inlinable
 	public func enumerate<T: Boundable>(bounds: T, _ perform: (Element) -> Bool) where T.Vector == Element.Vector {
 		let query = Bounds(bounds)
 
@@ -225,6 +239,7 @@ extension BVH: Closest {
 ///
 /// - Returns: The nearest element, or nil if the hierarchy is empty.
 ///
+	@inlinable
 	public func closest(to element: Element.Vector) -> Element? {
 		var nearest: Element?
 		var nearestDistance = Element.Vector.Component.infinity
@@ -278,6 +293,7 @@ extension BVH: Closest {
 /// - Returns: The nearest element and its associated result, or nil if no
 ///   element applied.
 ///
+	@inlinable
 	public func closest<Result>(to point: Element.Vector, measuring measure: (Element) -> (distance: Element.Vector.Component, result: Result)?) -> (element: Element, result: Result)? {
 		var best: (element: Element, result: Result)?
 		var bestDistance = Element.Vector.Component.infinity
@@ -311,18 +327,22 @@ extension BVH: Closest {
 }
 
 extension BVH: Collection {
+	@inlinable
 	public var startIndex: Array<Element>.Index {
 		elements.startIndex
 	}
 
+	@inlinable
 	public var endIndex: Array<Element>.Index {
 		elements.endIndex
 	}
 
+	@inlinable
 	public subscript(position: Int) -> Element {
 		elements[position]
     }
 
+    @inlinable
     public func index(after i: Int) -> Int {
 		elements.index(after: i)
     }
@@ -341,6 +361,7 @@ extension BVH: RayEnumerable {
 ///   - perform: A closure invoked with each element the ray enters. Return
 ///     `true` to continue, or `false` to stop enumeration.
 ///
+	@inlinable
 	public func enumerate(ray: Ray<Element.Vector>,  _ perform: (Element) -> Bool) {
 		var index = 0
 		while index < nodes.count {
@@ -384,6 +405,7 @@ extension BVH: RayIntersectable where Element.Vector: VectorMath {
 /// - Returns: The nearest element whose bounds the ray enters, or nil if the
 ///   ray misses every element.
 ///
+	@inlinable
 	public func intersects(ray: Ray<Element.Vector>) -> Element? {
 		var nearest: Element?
 		var nearestParameter = Element.Vector.Component.infinity
@@ -429,10 +451,12 @@ extension BVH.Node: Sendable where Element.Vector: Sendable {
 }
 
 extension BVH: Sequence {
+	@inlinable
 	public var count: Int {
 		elements.count
 	}
 
+	@inlinable
 	public func makeIterator() -> Array<Element>.Iterator {
 		elements.makeIterator()
 	}
@@ -459,6 +483,7 @@ extension BVH {
 /// - Returns: The nearest hit element and its associated result, or nil if
 ///   the ray misses every element.
 ///
+	@inlinable
 	public func hit<Hit>(ray: Ray<Element.Vector>, _ intersect: (Element) -> (distance: Element.Vector.Component, hit: Hit)?) -> (element: Element, hit: Hit)? {
 		var best: (element: Element, hit: Hit)?
 		var bestDistance = Element.Vector.Component.infinity
@@ -506,6 +531,7 @@ extension BVH {
 /// - Returns: The nearest hit element within the range and its associated
 ///   result, or nil if none was hit.
 ///
+	@inlinable
 	public func hit<Hit>(ray: Ray<Element.Vector>, within distance: Range<Element.Vector.Component>, _ intersect: (Element) -> (distance: Element.Vector.Component, hit: Hit)?) -> (element: Element, hit: Hit)? {
 		var best: (element: Element, hit: Hit)?
 		var bestDistance = distance.upperBound
@@ -552,6 +578,7 @@ extension BVH {
 ///
 /// - Returns: `true` if any element blocks the ray within the range.
 ///
+	@inlinable
 	public func isOccluded(ray: Ray<Element.Vector>, within distance: Range<Element.Vector.Component>, _ blocks: (Element) -> Bool) -> Bool {
 		var index = 0
 		while index < nodes.count {

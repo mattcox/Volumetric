@@ -33,10 +33,12 @@ public struct MedianSplit: BVHBuilder {
 ///   - maximumLeafSize: The maximum number of primitives permitted in a leaf
 ///     node. Clamped to at least one. Defaults to four.
 ///
+	@inlinable
 	public init(maximumLeafSize: Int = 4) {
 		self.maximumLeafSize = Swift.max(1, maximumLeafSize)
 	}
 
+	@inlinable
 	public func build<Element: Boundable>(_ elements: [Element], bounds: Bounds<Element.Vector>) -> BVH<Element>.BuildTree where Element.Vector: VectorMath, Element.Vector.Component: Real & SIMDScalar & BinaryFloatingPoint {
 		typealias Vector = Element.Vector
 		typealias Tree = BVH<Element>.BuildTree
@@ -117,6 +119,7 @@ extension BVHBuilder where Self == MedianSplit {
 /// A builder that recursively partitions primitives at the median of their
 /// centroids.
 ///
+	@inlinable
 	public static var medianSplit: MedianSplit {
 		MedianSplit()
 	}
@@ -128,6 +131,7 @@ extension BVHBuilder where Self == MedianSplit {
 ///   - maximumLeafSize: The maximum number of primitives permitted in a
 ///     leaf node.
 ///
+	@inlinable
 	public static func medianSplit(maximumLeafSize: Int) -> MedianSplit {
 		MedianSplit(maximumLeafSize: maximumLeafSize)
 	}
