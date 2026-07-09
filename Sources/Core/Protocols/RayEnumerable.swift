@@ -12,9 +12,13 @@ import Cartesian
 /// passes through.
 ///
 public protocol RayEnumerable {
+/// The type of Vector the ray is defined in.
+///
+	associatedtype Vector: VectorProtocol & VectorMath
+
 /// The type of element contained within the structure.
 ///
-	associatedtype Element: Boundable where Element.Vector: VectorMath
+	associatedtype Element
 
 /// Enumerate every element the ray passes through.
 ///
@@ -23,5 +27,5 @@ public protocol RayEnumerable {
 ///   - perform: A closure invoked with each element the ray enters. Return
 ///     `true` to continue, or `false` to stop enumeration.
 ///
-	func enumerate(ray: Ray<Element.Vector>, _ perform: (Element) -> Bool)
+	func enumerate(ray: Ray<Vector>, _ perform: (Element) -> Bool)
 }

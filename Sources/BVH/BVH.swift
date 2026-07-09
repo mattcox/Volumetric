@@ -424,7 +424,7 @@ extension BVH: Closest {
 	}
 }
 
-extension BVH {
+extension BVH: RadiusEnumerable {
 /// Enumerate every element whose bounds lie within a radius of a point.
 ///
 /// This is a broad-phase query: an element is reported when the nearest point
@@ -473,28 +473,9 @@ extension BVH {
 			}
 		}
 	}
+}
 
-/// Return every element whose bounds lie within a radius of a point.
-///
-/// A collecting convenience over ``enumerate(within:of:_:)``; see that method
-/// for the range semantics. The elements are returned in no particular order.
-///
-/// - Parameters:
-///   - radius: The radius of the query ball. Negative radii return nothing.
-///   - point: The centre of the query ball.
-///
-/// - Returns: The elements within range, in no particular order.
-///
-	@inlinable
-	public func elements(within radius: Element.Vector.Component, of point: Element.Vector) -> [Element] {
-		var result: [Element] = []
-		enumerate(within: radius, of: point) { element in
-			result.append(element)
-			return true
-		}
-		return result
-	}
-
+extension BVH: Nearest {
 /// Return the `count` elements nearest to a point, ordered nearest first.
 ///
 /// This is a broad-phase query: elements are ranked by the distance to their

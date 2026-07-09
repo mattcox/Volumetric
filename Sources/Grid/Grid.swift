@@ -488,7 +488,7 @@ extension Grid: Closest {
 	}
 }
 
-extension Grid {
+extension Grid: Nearest {
 /// Return the `count` elements nearest to a point, ordered nearest first.
 ///
 /// Elements are ranked by the distance from their position to the point.
@@ -575,7 +575,9 @@ extension Grid {
 
 		return heap.sorted { $0.distance < $1.distance }.map(\.element)
 	}
+}
 
+extension Grid: RadiusEnumerable {
 /// Enumerate every element whose position lies within a radius of a point.
 ///
 /// An element is reported when its position is within `radius` of `point`
@@ -617,30 +619,9 @@ extension Grid {
 			return true
 		}
 	}
-
-/// Return every element whose position lies within a radius of a point.
-///
-/// A collecting convenience over ``enumerate(within:of:_:)``; see that method
-/// for the range semantics. The elements are returned in no particular order.
-///
-/// - Parameters:
-///   - radius: The radius of the query ball. Negative radii return nothing.
-///   - point: The centre of the query ball.
-///
-/// - Returns: The elements within range, in no particular order.
-///
-	@inlinable
-	public func elements(within radius: Element.Vector.Component, of point: Element.Vector) -> [Element] {
-		var result: [Element] = []
-		enumerate(within: radius, of: point) { element in
-			result.append(element)
-			return true
-		}
-		return result
-	}
 }
 
-extension Grid {
+extension Grid: RayEnumerable {
 /// Traverse the cells the ray passes through, in order of increasing distance.
 ///
 /// The ray is first clipped to the grid bounds, then stepped from cell to cell
