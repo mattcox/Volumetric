@@ -31,6 +31,29 @@ private func contains(_ outer: Bounds<V>, _ inner: Bounds<V>) -> Bool {
 	return true
 }
 
+// The original element indices covered by a subtree, resolved through the
+// build tree's ordering permutation.
+//
+private func elementIndices(_ tree: BVH<Bounds<V>>.BuildTree, under index: Int) -> [Int] {
+	switch tree.nodes[index].content {
+		case .leaf(let range):
+			return range.map { tree.ordering[$0] }
+		case .interior(let children):
+			return children.flatMap { elementIndices(tree, under: $0) }
+	}
+}
+
+// The number of primitives covered by a subtree.
+//
+private func primitiveCount(_ tree: BVH<Bounds<V>>.BuildTree, under index: Int) -> Int {
+	switch tree.nodes[index].content {
+		case .leaf(let range):
+			return range.count
+		case .interior(let children):
+			return children.reduce(0) { $0 + primitiveCount(tree, under: $1) }
+	}
+}
+
 @Test
 func medianSplitProducesValidTree() throws {
 	let elements = makeElements(50)
@@ -129,5 +152,85 @@ func medianSplitSingleElementIsALeafRoot() throws {
 		#expect(range == 0..<1)
 	} else {
 		Issue.record("root of a single-element build should be a leaf")
+	}
+}
+
+// MARK: - Split axis
+
+@Test
+func medianSplitSplitsAlongWidestAxis() throws {
+	// For each axis in turn, build elements spread far apart along that axis and
+	// barely at all along the others. The root split must separate them along
+	// the widest axis: every element on the low side has a smaller centroid on
+	// that axis than every element on the high side.
+	for axis in 0..<V.count {
+		var elements: [Bounds<V>] = []
+		for i in 0..<64 {
+			var corner = V(repeating: 0)
+			for d in 0..<V.count {
+				corner[d] = Float((i * (d + 1)) % 5) * 0.01		// tiny jitter
+			}
+			corner[axis] = Float(i)								// dominant spread
+			elements.append(Bounds(min: corner, max: corner + Float(0.1)))
+		}
+
+		let tree = MedianSplit(maximumLeafSize: 4).build(elements, bounds: Bounds(elements)!)
+		guard case .interior(let children) = tree.nodes[tree.root].content else {
+			Issue.record("root should be interior for 64 elements")
+			return
+		}
+
+		let low = elementIndices(tree, under: children[0]).map { elements[$0].center[axis] }
+		let high = elementIndices(tree, under: children[1]).map { elements[$0].center[axis] }
+		#expect(low.max()! < high.min()!)
+	}
+}
+
+// MARK: - Balance
+
+@Test
+func medianSplitProducesABalancedTree() throws {
+	// The defining property of a median split: every interior node divides its
+	// primitives as evenly as possible, so sibling subtrees differ by at most
+	// one primitive. This is what a mere full-binary node count does not
+	// guarantee.
+	let elements = makeElements(50)
+	let tree = MedianSplit(maximumLeafSize: 1).build(elements, bounds: Bounds(elements)!)
+
+	for node in tree.nodes {
+		guard case .interior(let children) = node.content else {
+			continue
+		}
+		#expect(children.count == 2)
+		let left = primitiveCount(tree, under: children[0])
+		let right = primitiveCount(tree, under: children[1])
+		#expect(abs(left - right) <= 1)
+	}
+}
+
+// MARK: - Determinism
+
+@Test
+func medianSplitIsDeterministic() throws {
+	let elements = makeElements(200)
+	let bounds = Bounds(elements)!
+
+	let first = MedianSplit(maximumLeafSize: 4).build(elements, bounds: bounds)
+	let second = MedianSplit(maximumLeafSize: 4).build(elements, bounds: bounds)
+
+	#expect(first.ordering == second.ordering)
+	#expect(first.root == second.root)
+	#expect(first.nodes.count == second.nodes.count)
+	for (a, b) in zip(first.nodes, second.nodes) {
+		#expect(a.bounds.min == b.bounds.min)
+		#expect(a.bounds.max == b.bounds.max)
+		switch (a.content, b.content) {
+			case let (.leaf(x), .leaf(y)):
+				#expect(x == y)
+			case let (.interior(x), .interior(y)):
+				#expect(x == y)
+			default:
+				Issue.record("node content diverged between identical builds")
+		}
 	}
 }
