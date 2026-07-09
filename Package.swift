@@ -22,6 +22,12 @@ let package = Package(
 			]
 		),
 		.library(
+			name: "Grid",
+			targets: [
+				"Grid"
+			]
+		),
+		.library(
 			name: "Volumetric",
 			targets: [
 				"Volumetric"
@@ -60,10 +66,24 @@ let package = Package(
 			]
 		),
 		.target(
+			name: "Grid",
+			dependencies: [
+				"Core",
+				"MortonCode"
+			]
+		),
+		.testTarget(
+			name: "GridTests",
+			dependencies: [
+				"Grid"
+			]
+		),
+		.target(
 			name: "Volumetric",
 			dependencies: [
 				"Core",
-				"BVH"
+				"BVH",
+				"Grid"
 			]
 		),
 		.executableTarget(
