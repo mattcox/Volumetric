@@ -214,31 +214,137 @@ public struct AAC: BVHBuilder {
 		// Greedily merge the two closest clusters — those whose combined bounds
 		// have the smallest surface area — until `target` clusters remain.
 		//
-		// This is the straightforward O(|C|²)-per-merge form of the paper's
-		// CombineClusters. The nearest-neighbour cache and reused distance
-		// matrix that make the whole build O(N log N) are deferred
-		// optimizations; correctness does not depend on them, and cluster sets
-		// here are small.
+		// This is the paper's optimized CombineClusters (Gu et al. 2013,
+		// Algorithm 4 with the §3.3.1 speed-ups). Two structures replace the
+		// naive O(|C|³) triple loop:
+		//
+		//   * a nearest-neighbour cache — `nearest[i]` is the cluster closest to
+		//     `i`, so each merge is chosen by a single O(|C|) scan rather than a
+		//     fresh O(|C|²) all-pairs search; and
+		//   * a reused distance matrix — every `d(Ci, Cj)` is computed once
+		//     up-front, so the cache is refreshed by matrix lookups instead of
+		//     recomputed surface areas.
+		//
+		// Together these bring each call to O(|C|²), and since the reduction
+		// function keeps `|C|` small at every constraint-tree node, the whole
+		// build is O(N log N). Removal follows the paper: the merged cluster
+		// overwrites `Left` and the last cluster is swapped into `Right`, so the
+		// matrix stays compact and shrinks by one per merge.
+		//
+		// The per-level matrix reuse of §3.3.2 is intentionally not applied — it
+		// serialises sibling subtrees, which would defeat the parallel
+		// `buildTree` recursion; each call owns its matrix instead.
 		//
 		@Sendable func combineClusters(_ clusters: inout [Node], target: Int) {
-			while clusters.count > target {
-				var best = Component.infinity
-				var left = 0
-				var right = 1
-				for i in 0..<clusters.count {
-					for j in (i + 1)..<clusters.count {
-						let distance = clusters[i].bounds.union(with: clusters[j].bounds).surfaceArea
-						if distance < best {
-							best = distance
-							left = i
-							right = j
-						}
+			let initialCount = clusters.count
+			guard initialCount > target else {
+				return
+			}
+
+			var count = initialCount
+			let stride = initialCount
+
+			// Row-major distance matrix over the active prefix `[0, count)`. It is
+			// symmetric; the diagonal is unused.
+			//
+			var distances = [Component](repeating: 0, count: initialCount * initialCount)
+
+			// The nearest-neighbour cache: `nearest[i]` is the index of the
+			// closest cluster to `i`, and `nearestDistance[i]` the distance to it.
+			//
+			var nearest = [Int](repeating: -1, count: initialCount)
+			var nearestDistance = [Component](repeating: .infinity, count: initialCount)
+
+			// Refresh `i`'s cache entry by scanning its (up-to-date) matrix row.
+			//
+			func refreshNearest(_ i: Int) {
+				var bestDistance = Component.infinity
+				var best = -1
+				let row = i * stride
+				for j in 0..<count where j != i {
+					let distance = distances[row + j]
+					if distance < bestDistance {
+						bestDistance = distance
+						best = j
 					}
 				}
+				nearest[i] = best
+				nearestDistance[i] = bestDistance
+			}
 
+			// Fill the matrix once (upper triangle mirrored), then seed the cache.
+			//
+			for i in 0..<count {
+				let boundsI = clusters[i].bounds
+				for j in (i + 1)..<count {
+					let distance = boundsI.union(with: clusters[j].bounds).surfaceArea
+					distances[i * stride + j] = distance
+					distances[j * stride + i] = distance
+				}
+			}
+			for i in 0..<count {
+				refreshNearest(i)
+			}
+
+			while count > target {
+				// The closest pair is the smallest cached distance.
+				//
+				var best = Component.infinity
+				var left = 0
+				for i in 0..<count where nearestDistance[i] < best {
+					best = nearestDistance[i]
+					left = i
+				}
+				let right = nearest[left]
+
+				// Merge into `left`, then recompute `left`'s row and column.
+				//
 				let merged = Node(merging: clusters[left], clusters[right])
-				clusters.remove(at: right)		// right > left, so left stays valid
 				clusters[left] = merged
+				let mergedBounds = merged.bounds
+				let leftRow = left * stride
+				for j in 0..<count where j != left {
+					let distance = mergedBounds.union(with: clusters[j].bounds).surfaceArea
+					distances[leftRow + j] = distance
+					distances[j * stride + left] = distance
+				}
+
+				// Swap the last cluster into `right`, keeping the matrix compact.
+				// Its distances to everything else are unchanged, so its row and
+				// column are copied rather than recomputed.
+				//
+				let last = count - 1
+				if right != last {
+					clusters[right] = clusters[last]
+					let rightRow = right * stride
+					let lastRow = last * stride
+					for j in 0..<count {
+						distances[rightRow + j] = distances[lastRow + j]
+						distances[j * stride + right] = distances[j * stride + last]
+					}
+				}
+				count = last
+				clusters.removeLast()
+
+				// Repair the cache. `left` and the relocated cluster always need a
+				// fresh nearest; every other cluster whose nearest was `left` (its
+				// bounds changed) or the removed `right` (it is gone) is recomputed
+				// from its original pointer, while a pointer to the moved `last` is
+				// simply redirected to `right` — its distance is unchanged.
+				//
+				for i in 0..<count {
+					if i == left || (right != last && i == right) {
+						refreshNearest(i)
+						continue
+					}
+					let pointer = nearest[i]
+					if pointer == left || pointer == right {
+						refreshNearest(i)
+					}
+					else if right != last && pointer == last {
+						nearest[i] = right
+					}
+				}
 			}
 		}
 
