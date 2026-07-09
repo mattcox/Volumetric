@@ -424,37 +424,71 @@ public struct AAC: BVHBuilder {
 
 		// Flatten the cluster graph into the `BuildTree` representation. A DFS
 		// emits leaf primitives contiguously into `ordering` (clusters need not
-		// be contiguous in Morton order), and collapses any subtree at or below
-		// the leaf-size limit into a single leaf.
+		// be contiguous in Morton order).
 		//
+		// Rather than collapse every subtree at or below the leaf-size limit, the
+		// pass makes the paper's cost-based flattening decision (Gu et al. 2013,
+		// §3.3.2). Working bottom-up, the exact cost of a subtree is known, so no
+		// linear SAH approximation is needed. A subtree is flattened into a
+		// single leaf when the cost of intersecting all its primitives is no more
+		// than the cost of traversing it:
+		//
+		//   C(T) = min( Cₜ·|T|,  Σ_child S(child)/S(T)·(C_b + C(child)) )
+		//
+		// where `Cb`/`Ct` weight ray-box traversal against ray-primitive
+		// intersection. Minimising the textbook SAH (`Cb == Ct`) drives the
+		// agglomerative tree toward its natural single-primitive leaves — the
+		// tightest, lowest-cost hierarchy, but roughly three times the nodes.
+		// Because a primitive here is itself a box, the two costs are physically
+		// equal, so the ratio is used purely as a leaf-size bias: weighting
+		// traversal more heavily flattens a little more eagerly, settling around
+		// two primitives per leaf. That trades a few percent of SAH quality for a
+		// far smaller node count — a better default for a stored, GPU-bound BVH.
+		// `maximumLeafSize` remains a hard upper bound on a flattened leaf.
+		//
+		let boxCost: Component = 8
+		let primitiveCost: Component = 1
+
 		var nodes: [Tree.Node] = []
 		var ordering: [Int] = []
 
-		func collect(_ node: Node) {
+		// Emit a subtree and return its node index and true cost `C(T)`. When a
+		// node flattens, the children it provisionally emitted are discarded —
+		// their primitives are already contiguous in `ordering`, so they collapse
+		// into one leaf without re-collecting.
+		//
+		func emit(_ node: Node) -> (index: Int, cost: Component) {
 			if let element = node.element {
-				ordering.append(element)
-			}
-			else {
-				collect(node.left!)
-				collect(node.right!)
-			}
-		}
-
-		func emit(_ node: Node) -> Int {
-			if node.element != nil || node.primitiveCount <= maximumLeafSize {
 				let start = ordering.count
-				collect(node)
+				ordering.append(element)
 				nodes.append(Tree.Node(bounds: node.bounds, content: .leaf(primitives: start..<ordering.count)))
-				return nodes.count - 1
+				return (nodes.count - 1, primitiveCost)
 			}
 
-			let left = emit(node.left!)
-			let right = emit(node.right!)
-			nodes.append(Tree.Node(bounds: node.bounds, content: .interior(children: [left, right])))
-			return nodes.count - 1
+			let start = ordering.count
+			let firstNode = nodes.count
+			let (leftIndex, leftCost) = emit(node.left!)
+			let (rightIndex, rightCost) = emit(node.right!)
+
+			let area = node.bounds.surfaceArea
+			let leftArea = node.left!.bounds.surfaceArea
+			let rightArea = node.right!.bounds.surfaceArea
+			let keepCost = area > 0
+				? (leftArea * (boxCost + leftCost) + rightArea * (boxCost + rightCost)) / area
+				: Component.infinity
+			let flatCost = primitiveCost * Component(node.primitiveCount)
+
+			if node.primitiveCount <= maximumLeafSize && flatCost <= keepCost {
+				nodes.removeLast(nodes.count - firstNode)
+				nodes.append(Tree.Node(bounds: node.bounds, content: .leaf(primitives: start..<ordering.count)))
+				return (nodes.count - 1, flatCost)
+			}
+
+			nodes.append(Tree.Node(bounds: node.bounds, content: .interior(children: [leftIndex, rightIndex])))
+			return (nodes.count - 1, keepCost)
 		}
 
-		let root = emit(rootCluster)
+		let root = emit(rootCluster).index
 
 		return Tree(nodes: nodes, ordering: ordering, root: root)
 	}
