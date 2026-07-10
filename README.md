@@ -10,7 +10,13 @@ The package provides the following data structures and algorithms:
 
 ### Bounds
 
-`Bounds` is an axis-aligned bounding volume defined by a minimum and maximum extreme, generic over dimension. Specialize it with a two-component vector and it describes a rectangle; three components, a box; more, a hyper-box — one implementation across every dimension, working over both the fast SIMD-backed vectors and slower vectors of arbitrary dimension. It is the geometric primitive the acceleration structures are built on: it combines and clips regions (`union`, `intersection`), tests points for containment, reports the `surfaceArea` and `center` that builders use to score splits, and answers ray/box intersection by returning the entry–exit interval along the ray. Most operations require component-wise arithmetic (`VectorMath`) and are exposed conditionally, so a bounds stays usable, if limited, over any vector type. The sorted-extremes invariant (`min` ≤ `max` component-wise) is maintained internally and cannot be broken from outside the module.
+`Bounds` is an axis-aligned bounding volume defined by a minimum and maximum extreme, generic over dimension.
+
+Specialize it with a two-component vector and it describes a rectangle; three components, a box; more, a hyper-box — one implementation across every dimension, working over both the fast SIMD-backed vectors and slower vectors of arbitrary dimension.
+
+It is the geometric primitive the acceleration structures are built on: it combines and clips regions (`union`, `intersection`), tests points for containment, reports the `surfaceArea` and `center` that builders use to score splits, and answers ray/box intersection by returning the entry–exit interval along the ray.
+
+Most operations require component-wise arithmetic (`VectorMath`) and are exposed conditionally, so a bounds stays usable, if limited, over any vector type. The sorted-extremes invariant (`min` ≤ `max` component-wise) is maintained internally and cannot be broken from outside the module.
 
 ```swift
 let a = Bounds(min: Vector3(0, 0, 0), max: Vector3(1, 1, 1))
@@ -21,7 +27,15 @@ let hit = a.intersects(ray: someRay)      // entry/exit interval, or nil
 
 ### BVH
 
-The `BVH` (bounding volume hierarchy) organizes elements that have spatial *extent* into a tree of nested bounding volumes, so a query can prune whole subtrees instead of testing every element. It is an immutable value type: build it once from any sequence of `Boundable` elements using a `BVHBuilder`, and it is then read-only and freely queryable. Internally the tree is flattened depth-first with a per-node *escape index*, which makes traversal stackless and GPU-friendly, and it can be *refitted* in `O(n)` against rigidly moved geometry — the cheap alternative to a full rebuild when connectivity is stable, as in animation. The query surface is dimension-agnostic: nearest element (`closest`), k-nearest (`nearest`), everything within a radius or a bounding box, ray traversal and nearest-hit intersection, plus `Collection`/`Sequence`. Only the topology and leaf ordering are the builder's responsibility; the memory layout, bounds propagation, escape links, and traversal are shared, so a hierarchy built by one strategy is the same type as one built by another and the two are interchangeable.
+The `BVH` (bounding volume hierarchy) organizes elements that have spatial *extent* into a tree of nested bounding volumes, so a query can prune whole subtrees instead of testing every element.
+
+It is an immutable value type: build it once from any sequence of `Boundable` elements using a `BVHBuilder`, and it is then read-only and freely queryable.
+
+Internally the tree is flattened depth-first with a per-node *escape index*, which makes traversal stackless and GPU-friendly, and it can be *refitted* in `O(n)` against rigidly moved geometry, the cheap alternative to a full rebuild when connectivity is stable, as in animation.
+
+The query surface is dimension-agnostic: nearest element (`closest`), k-nearest (`nearest`), everything within a radius or a bounding box, ray traversal and nearest-hit intersection, plus `Collection`/`Sequence`.
+
+Only the topology and leaf ordering are the builder's responsibility; the memory layout, bounds propagation, escape links, and traversal are shared, so a hierarchy built by one strategy is the same type as one built by another and the two are interchangeable.
 
 ```swift
 let bvh = BVH(elements, using: .binnedSAH)
@@ -38,15 +52,23 @@ A top-down builder that splits primitives at the median of their centroids, alon
 
 #### BinnedSAH
 
-A top-down builder using a binned surface area heuristic. At each node the centroids are sorted into a fixed number of bins per axis, candidate split planes are swept, and the primitives are partitioned at the cheapest plane found. Binning makes the split search `O(n)` per node (so the whole build is `O(n log n)`) while producing a hierarchy far cheaper to traverse than `MedianSplit`. **This is the recommended general-purpose builder.** Tuned by `maximumLeafSize` and `binCount` (12–16 is the usual sweet spot).
+A top-down builder using a binned surface area heuristic. At each node the centroids are sorted into a fixed number of bins per axis, candidate split planes are swept, and the primitives are partitioned at the cheapest plane found. Binning makes the split search `O(n)` per node (so the whole build is `O(n log n)`) while producing a hierarchy far cheaper to traverse than `MedianSplit`.
+
+**This is the recommended general-purpose builder.** Tuned by `maximumLeafSize` and `binCount` (12–16 is the usual sweet spot).
 
 #### LinearBVH
 
-A builder that orders primitives along a Morton (Z-order) curve and builds a radix tree over the sorted codes. The space-filling curve is its only notion of locality — no split is ever scored against a cost function — so the build is extremely fast (a sort plus a linear pass) but the hierarchy is of lower quality. Reach for it when the tree is rebuilt frequently, or destined for the GPU, and build time dominates. Tuned by `maximumLeafSize`.
+A builder that orders primitives along a Morton (Z-order) curve and builds a radix tree over the sorted codes. The space-filling curve is its only notion of locality (no split is ever scored against a cost function) so the build is extremely fast (a sort plus a linear pass) but the hierarchy is of lower quality.
+
+Reach for it when the tree is rebuilt frequently, or destined for the GPU, and build time dominates. Tuned by `maximumLeafSize`.
 
 #### AAC
 
-Approximate agglomerative clustering (Gu et al. 2013) builds the hierarchy *bottom-up*: primitives are Morton-sorted, then the closest clusters — those whose combined bounds have the smallest surface area — are greedily merged up the tree, down to a target count that shrinks with height. It drives the tree toward tight, single-primitive leaves, giving the fewest ray/primitive tests of any builder here, at the cost of a more involved build and roughly twice the node count; the two independent halves of each split are clustered in parallel across cores. Two presets bracket the quality/speed trade-off — `.aacHighQuality` (δ=20, ε=0.1) and `.aacFast` (δ=4, ε=0.2) — or use `.aac(...)` to tune `delta`, `epsilon`, `maximumLeafSize`, and `parallel`.
+Approximate agglomerative clustering (Gu et al. 2013) builds the hierarchy *bottom-up*: primitives are Morton-sorted, then the closest clusters (t)hose whose combined bounds have the smallest surface area) are greedily merged up the tree, down to a target count that shrinks with height.
+
+It drives the tree toward tight, single-primitive leaves, giving the fewest ray/primitive tests of any builder here, at the cost of a more involved build and roughly twice the node count; the two independent halves of each split are clustered in parallel across cores.
+
+Two presets bracket the quality/speed trade-off — `.aacHighQuality` (δ=20, ε=0.1) and `.aacFast` (δ=4, ε=0.2) — or use `.aac(...)` to tune `delta`, `epsilon`, `maximumLeafSize`, and `parallel`.
 
 **Builder comparison** — 10,000 primitives, 4,000 rays (Release build, best-of-runs):
 
@@ -62,7 +84,13 @@ Approximate agglomerative clustering (Gu et al. 2013) builds the hierarchy *bott
 
 ### Grid
 
-`Grid` organizes *point* elements — things with a position but no extent — into a uniform lattice of cells: the natural structure for point clouds, particle systems, and fixed-radius neighbour search. Each element is binned into exactly one cell by its position. Like the BVH it is an immutable value type, built once from any sequence of `Positionable` elements, but a rebuild is only a sort plus a linear pass — cheap enough to do every frame for fully dynamic data. Storage is the compact, GPU-style form: elements are laid out in Morton (Z-order) cell order so spatially-near cells are near in memory, with a sorted occupied-cell directory mapping each cell to its span of elements — empty cells cost nothing, so the grid stays sparse and bounded in any dimension. Queries walk the lattice through stack scratch buffers with no per-query allocation, and cover the same surface as the BVH: `closest`, k-nearest, radius, bounding-box, and ray. The single tuning knob is `cellSize` — set it near your search radius so a query visits only a small neighbourhood of cells — or let `Grid` derive one targeting roughly one element per cell.
+`Grid` organizes *positional* elements into a uniform lattice of cells: the natural structure for point clouds, particle systems, and fixed-radius neighbour search. Each element is binned into exactly one cell by its position.
+
+Like the BVH it is an immutable value type, built once from any sequence of `Positionable` elements, but a rebuild is only a sort plus a linear pass, cheap enough to do every frame for fully dynamic data.
+
+Storage is the compact, GPU-style form: elements are laid out in Morton (Z-order) cell order so spatially-near cells are near in memory, with a sorted occupied-cell directory mapping each cell to its span of elements. Empty cells cost nothing, so the grid stays sparse and bounded in any dimension.
+
+Queries walk the lattice through stack scratch buffers with no per-query allocation, and cover the same surface as the BVH: `closest`, k-nearest, radius, bounding-box, and ray.
 
 ```swift
 let grid = Grid(particles, cellSize: 4)
