@@ -59,7 +59,7 @@ extension Bounds {
 /// A bounds across _n_ dimensions has _2^n_ corners, formed by every
 /// combination of the minimum and maximum extreme across each axis.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	var corners: [Vector] {
 		let dimensions = Vector.count
 
@@ -460,7 +460,7 @@ extension Bounds: Hashable where Vector: Hashable {
 }
 
 extension Bounds: RayIntersectable where Vector: VectorMath, Vector.Component: Real {
-	@inlinable @usableFromInline
+	@inlinable
 	static func intersectSlab(origin: Vector.Component, inverseDirection: Vector.Component, min: Vector.Component, max: Vector.Component, minimumParameter: inout Vector.Component, maximumParameter: inout Vector.Component) -> Bool {
 		var parameter0 = (min - origin) * inverseDirection
 		var parameter1 = (max - origin) * inverseDirection

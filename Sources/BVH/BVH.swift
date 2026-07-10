@@ -61,7 +61,7 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 
 	/// A boolean indicating whether this node is a leaf.
 	///
-		@inlinable @usableFromInline
+		@inlinable
 		var isLeaf: Bool {
 			elementCount > 0
 		}
@@ -76,7 +76,7 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 	///   - escapeIndex: The index of the next node to visit once this node's
 	///     subtree is skipped or fully processed.
 	///
-		@inlinable @usableFromInline
+		@inlinable
 		init(bounds: Bounds<Element.Vector>, firstElement: Int, elementCount: Int, escapeIndex: Int) {
 			self.bounds = bounds
 			self.firstElement = firstElement
@@ -114,7 +114,7 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 /// Used internally to produce a refit hierarchy that shares the topology of
 /// an existing one.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	init(bounds: Bounds<Element.Vector>, nodes: [Node], elements: [Element], ordering: [Int]) {
 		self.bounds = bounds
 		self.nodes = nodes

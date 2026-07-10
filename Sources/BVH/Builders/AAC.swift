@@ -37,7 +37,7 @@ final class ClusterNode<Vector: VectorMath> where Vector.Component: Real & SIMDS
 
 /// A singleton cluster wrapping a single primitive.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	init(element: Int, bounds: Bounds<Vector>) {
 		self.bounds = bounds
 		self.element = element
@@ -48,7 +48,7 @@ final class ClusterNode<Vector: VectorMath> where Vector.Component: Real & SIMDS
 
 /// An interior cluster formed by merging two clusters.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	init(merging first: ClusterNode, _ second: ClusterNode) {
 		self.bounds = first.bounds.union(with: second.bounds)
 		self.element = nil

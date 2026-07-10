@@ -62,7 +62,7 @@ public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Elem
 	///   - start: The index of the cell's first element.
 	///   - count: The number of elements binned into the cell.
 	///
-		@inlinable @usableFromInline
+		@inlinable
 		init(code: UInt64, start: Int, count: Int) {
 			self.code = code
 			self.start = start
@@ -117,7 +117,7 @@ public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Elem
 
 /// Initialize a grid directly from its computed storage.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	init(bounds: Bounds<Element.Vector>, cellSize: Element.Vector.Component, resolution: [Int], cells: [Cell], elements: [Element], ordering: [Int], spread: [UInt64]) {
 		self.bounds = bounds
 		self.cellSize = cellSize
@@ -271,7 +271,7 @@ extension Grid {
 /// build. Entries whose byte cannot occur for this dimension count (when fewer
 /// than eight bits are available per axis) are never read, so a zero is fine.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	static func spreadTable(dimensions: Int) -> [UInt64] {
 		var table = [UInt64](repeating: 0, count: 256)
 		var coordinates = [UInt64](repeating: 0, count: dimensions)
@@ -291,7 +291,7 @@ extension Grid {
 /// whole coordinate, so build and query always agree. Coordinates are clamped
 /// to the bits available per axis so that encoding never overflows.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	static func mortonCode(_ coordinate: UnsafePointer<Int>, count: Int, spread: [UInt64]) -> UInt64 {
 		let bits = Swift.max(1, 64 / count)
 		let limit: UInt64 = bits >= 64 ? .max : (UInt64(1) << UInt64(bits)) - 1
@@ -322,7 +322,7 @@ extension Grid {
 /// The Morton code identifying a cell coordinate, using this grid's dilation
 /// table.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	func mortonCode(_ coordinate: UnsafePointer<Int>, count: Int) -> UInt64 {
 		Grid.mortonCode(coordinate, count: count, spread: spread)
 	}
@@ -330,7 +330,7 @@ extension Grid {
 /// The cell index along a single axis containing a world coordinate, clamped
 /// into the grid.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	func cellIndex(axis: Int, of coordinate: Element.Vector.Component) -> Int {
 		let index = Int(((coordinate - bounds.min[axis]) / cellSize).rounded(.down))
 		return Swift.min(Swift.max(index, 0), resolution[axis] - 1)
@@ -340,7 +340,7 @@ extension Grid {
 ///
 /// The directory is sorted by code, so the lookup is a binary search.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	func range(for code: UInt64) -> Range<Int>? {
 		var low = 0
 		var high = cells.count
@@ -362,7 +362,7 @@ extension Grid {
 
 /// The squared Euclidean distance between two positions.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	func squaredDistance(_ a: Element.Vector, _ b: Element.Vector) -> Element.Vector.Component {
 		var total: Element.Vector.Component = 0
 		for axis in 0..<Element.Vector.count {
@@ -378,7 +378,7 @@ extension Grid {
 /// The coordinate is stepped through the single scratch buffer `cursor`, which
 /// is also what `body` is handed, so no allocation occurs per cell.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	func iterateBox(lo: UnsafePointer<Int>, hi: UnsafePointer<Int>, cursor: UnsafeMutablePointer<Int>, count: Int, _ body: (UnsafePointer<Int>) -> Bool) {
 		for axis in 0..<count where hi[axis] < lo[axis] {
 			return
@@ -412,7 +412,7 @@ extension Grid {
 /// Invoke `body` for every element in the cells at Chebyshev distance exactly
 /// `radius` from `center`, using the caller's scratch buffers.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	func searchShell(center: UnsafePointer<Int>, radius: Int, lo: UnsafeMutablePointer<Int>, hi: UnsafeMutablePointer<Int>, cursor: UnsafeMutablePointer<Int>, count: Int, _ body: (Element) -> Void) {
 		for axis in 0..<count {
 			lo[axis] = Swift.max(0, center[axis] - radius)
@@ -442,7 +442,7 @@ extension Grid {
 /// distance found is within it the search can stop. Returns infinity when the
 /// searched box already spans the whole grid.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	func searchedMargin(from point: Element.Vector, center: UnsafePointer<Int>, radius: Int, count: Int) -> Element.Vector.Component {
 		var margin = Element.Vector.Component.infinity
 		for axis in 0..<count {
@@ -726,7 +726,7 @@ extension Grid: RayEnumerable {
 /// carried in stack scratch, and `body` is invoked with each cell coordinate
 /// the ray enters, returning `true` to continue or `false` to stop.
 ///
-	@inlinable @usableFromInline
+	@inlinable
 	func traverse(ray: Ray<Element.Vector>, _ body: (UnsafePointer<Int>) -> Bool) {
 		typealias Component = Element.Vector.Component
 		let dimensions = Element.Vector.count
