@@ -31,8 +31,8 @@ let package = Package(
 		),
 	],
 	dependencies: [
-		.package(url: "https://github.com/mattcox/Cartesian.git", branch: "main"),
-		.package(url: "https://github.com/mattcox/MortonCode.git", branch: "main"),
+		.package(url: "https://github.com/mattcox/Cartesian.git", from: Version(1, 0, 0)),
+		.package(url: "https://github.com/mattcox/MortonCode.git", from: Version(1, 0, 1)),
 		.package(url: "https://github.com/apple/swift-argument-parser.git", from: Version(1, 3, 0)),
 	],
 	targets: [
