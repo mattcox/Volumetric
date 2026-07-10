@@ -8,9 +8,9 @@
 
 import Testing
 import Cartesian
-import Core
+import VolumetricCore
 import RealModule
-@testable import BVH
+@testable import VolumetricBVH
 
 private typealias V = Vector3<Float>
 

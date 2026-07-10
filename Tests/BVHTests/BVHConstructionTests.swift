@@ -8,8 +8,8 @@
 
 import Testing
 import Cartesian
-import Core
-@testable import BVH
+import VolumetricCore
+@testable import VolumetricBVH
 
 /// A small deterministic generator so randomised comparisons are reproducible.
 ///

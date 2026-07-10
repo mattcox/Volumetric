@@ -6,6 +6,6 @@
 //  Copyright © 2026 Matt Cox. All rights reserved.
 //
 
-@_exported import BVH
-@_exported import Core
-@_exported import Grid
+@_exported import VolumetricBVH
+@_exported import VolumetricCore
+@_exported import VolumetricGrid

@@ -7,7 +7,7 @@
 //
 
 import Cartesian
-import Core
+import VolumetricCore
 import RealModule
 
 /// A top-down ``BVH`` builder that recursively partitions primitives at the

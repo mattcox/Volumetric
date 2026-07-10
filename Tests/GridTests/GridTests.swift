@@ -7,11 +7,11 @@
 //
 
 import Cartesian
-import Core
+import VolumetricCore
 import RealModule
 import Testing
 
-@testable import Grid
+@testable import VolumetricGrid
 
 // MARK: - Support
 

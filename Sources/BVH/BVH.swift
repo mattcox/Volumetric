@@ -7,7 +7,7 @@
 //
 
 import Cartesian
-import Core
+import VolumetricCore
 import RealModule
 
 /// A bounding volume hierarchy over a collection of boundable elements.

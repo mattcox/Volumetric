@@ -9,7 +9,7 @@
 import Cartesian
 import Foundation
 import Testing
-@testable import Core
+@testable import VolumetricCore
 
 // A minimal Boundable used to exercise the Boundable-accepting operations
 // without the operator ambiguity of adding two Bounds together.

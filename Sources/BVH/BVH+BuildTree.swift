@@ -6,7 +6,7 @@
 //  Copyright © 2026 Matt Cox. All rights reserved.
 //
 
-import Core
+import VolumetricCore
 import Cartesian
 
 extension BVH {

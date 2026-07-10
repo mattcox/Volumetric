@@ -8,8 +8,8 @@
 
 import Testing
 import Cartesian
-import Core
-@testable import BVH
+import VolumetricCore
+@testable import VolumetricBVH
 
 private typealias V = Vector3<Float>
 

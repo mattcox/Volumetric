@@ -7,7 +7,7 @@
 //
 
 import Cartesian
-import Core
+import VolumetricCore
 import Dispatch
 import Foundation
 import MortonCode

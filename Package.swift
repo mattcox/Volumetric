@@ -10,21 +10,21 @@ let package = Package(
 	],
 	products: [
 		.library(
-			name: "Core",
+			name: "VolumetricCore",
 			targets: [
-				"Core"
+				"VolumetricCore"
 			]
 		),
 		.library(
-			name: "BVH",
+			name: "VolumetricBVH",
 			targets: [
-				"BVH"
+				"VolumetricBVH"
 			]
 		),
 		.library(
-			name: "Grid",
+			name: "VolumetricGrid",
 			targets: [
-				"Grid"
+				"VolumetricGrid"
 			]
 		),
 		.library(
@@ -41,58 +41,61 @@ let package = Package(
 	],
 	targets: [
 		.target(
-			name: "Core",
+			name: "VolumetricCore",
 			dependencies: [
 				"Cartesian"
-			]
+			],
+			path: "Sources/Core"
 		),
 		.testTarget(
 			name: "CoreTests",
 			dependencies: [
-				"Core"
+				"VolumetricCore"
 			]
 		),
 		.target(
-			name: "BVH",
+			name: "VolumetricBVH",
 			dependencies: [
-				"Core",
+				"VolumetricCore",
 				"MortonCode"
-			]
+			],
+			path: "Sources/BVH"
 		),
 		.testTarget(
 			name: "BVHTests",
 			dependencies: [
-				"BVH"
+				"VolumetricBVH"
 			]
 		),
 		.target(
-			name: "Grid",
+			name: "VolumetricGrid",
 			dependencies: [
-				"Core",
+				"VolumetricCore",
 				"MortonCode"
-			]
+			],
+			path: "Sources/Grid"
 		),
 		.testTarget(
 			name: "GridTests",
 			dependencies: [
-				"Grid"
+				"VolumetricGrid"
 			]
 		),
 		.target(
 			name: "Volumetric",
 			dependencies: [
-				"Core",
-				"BVH",
-				"Grid"
+				"VolumetricCore",
+				"VolumetricBVH",
+				"VolumetricGrid"
 			]
 		),
 		.executableTarget(
 			name: "benchmark",
 			dependencies: [
 				"Cartesian",
-				"Core",
-				"BVH",
-				"Grid",
+				"VolumetricCore",
+				"VolumetricBVH",
+				"VolumetricGrid",
 				.product(name: "ArgumentParser", package: "swift-argument-parser")
 			]
 		),

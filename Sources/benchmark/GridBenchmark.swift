@@ -14,9 +14,9 @@
 
 import ArgumentParser
 import Cartesian
-import Core
-import BVH
-import Grid
+import VolumetricCore
+import VolumetricBVH
+import VolumetricGrid
 
 private typealias Scalar = Float
 private typealias Vec = Vector3<Scalar>
