@@ -27,7 +27,9 @@ import RealModule
 /// elements are laid out in Morton (Z-order) cell order so that spatially-near
 /// cells are near in memory, and an occupied-cell directory — sorted by cell
 /// code — maps a cell to its contiguous span of elements. Empty cells cost
-/// nothing, so the storage stays sparse and bounded in any dimension.
+/// nothing, so the storage stays sparse and bounded in any dimension. Queries
+/// work cell coordinates through stack scratch buffers, so a lookup traverses
+/// the lattice without heap allocation.
 ///
 public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Element.Vector.Component: Real & SIMDScalar & BinaryFloatingPoint {
 /// An entry in the occupied-cell directory.
@@ -102,16 +104,28 @@ public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Elem
 	@usableFromInline
 	let ordering: [Int]
 
+/// The per-byte Morton dilation table, indexed by byte value.
+///
+/// Entry `b` holds the bits of the byte `b` spread into lane zero for this
+/// grid's dimension count — exactly what ``MortonCode`` produces for that byte
+/// in the first axis. The encoder tiles a coordinate's bytes through this table
+/// instead of interleaving bit by bit, so ``MortonCode`` remains the single
+/// definition of the cell layout while the hot path stays a few table lookups.
+///
+	@usableFromInline
+	let spread: [UInt64]
+
 /// Initialize a grid directly from its computed storage.
 ///
 	@inlinable @usableFromInline
-	init(bounds: Bounds<Element.Vector>, cellSize: Element.Vector.Component, resolution: [Int], cells: [Cell], elements: [Element], ordering: [Int]) {
+	init(bounds: Bounds<Element.Vector>, cellSize: Element.Vector.Component, resolution: [Int], cells: [Cell], elements: [Element], ordering: [Int], spread: [UInt64]) {
 		self.bounds = bounds
 		self.cellSize = cellSize
 		self.resolution = resolution
 		self.cells = cells
 		self.elements = elements
 		self.ordering = ordering
+		self.spread = spread
 	}
 
 /// Initialize a grid over a sequence of elements, using a fixed cell size.
@@ -128,7 +142,6 @@ public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Elem
 	@inlinable
 	public init?<T: Sequence>(_ sequence: T, cellSize: Element.Vector.Component) where T.Element == Element {
 		typealias Vector = Element.Vector
-		typealias Component = Vector.Component
 
 		let elements = Array(sequence)
 		guard elements.isEmpty == false else {
@@ -152,16 +165,28 @@ public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Elem
 			resolution[axis] = Swift.max(1, Int((extent / size).rounded(.up)))
 		}
 
-		// Assign each element a cell code, then order the elements by that code so
-		// that a cell's elements form a contiguous span.
+		// The Morton dilation table is derived once from MortonCode, then reused
+		// by both this build pass and every later query, so a single definition
+		// of the cell layout drives them all.
 		//
-		let codes: [UInt64] = elements.map { element in
-			var coordinate = [Int](repeating: 0, count: Vector.count)
-			for axis in 0..<Vector.count {
-				let index = Int(((element.position[axis] - bounds.min[axis]) / size).rounded(.down))
-				coordinate[axis] = Swift.min(Swift.max(index, 0), resolution[axis] - 1)
+		let dimensions = Vector.count
+		let spread = Grid.spreadTable(dimensions: dimensions)
+
+		// Assign each element a cell code, reusing one scratch coordinate for the
+		// whole pass, then order the elements by that code so that a cell's
+		// elements form a contiguous span.
+		//
+		var codes = [UInt64](repeating: 0, count: elements.count)
+		withUnsafeTemporaryAllocation(of: Int.self, capacity: dimensions) { scratch in
+			let coordinate = scratch.baseAddress!
+			for index in elements.indices {
+				let position = elements[index].position
+				for axis in 0..<dimensions {
+					let cell = Int(((position[axis] - bounds.min[axis]) / size).rounded(.down))
+					coordinate[axis] = Swift.min(Swift.max(cell, 0), resolution[axis] - 1)
+				}
+				codes[index] = Grid.mortonCode(coordinate, count: dimensions, spread: spread)
 			}
-			return Grid.mortonCode(for: coordinate)
 		}
 
 		var order = Array(elements.indices)
@@ -186,7 +211,7 @@ public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Elem
 			index = end
 		}
 
-		self.init(bounds: bounds, cellSize: size, resolution: resolution, cells: cells, elements: storedElements, ordering: order)
+		self.init(bounds: bounds, cellSize: size, resolution: resolution, cells: cells, elements: storedElements, ordering: order, spread: spread)
 	}
 
 /// Initialize a grid over a sequence of elements, choosing a cell size
@@ -236,20 +261,70 @@ public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Elem
 }
 
 extension Grid {
-/// The Morton code identifying a cell coordinate.
+/// The per-byte Morton dilation table for a given dimension count.
 ///
-/// Coordinates are clamped to the bits available per axis so that encoding
-/// never overflows; in the rare case it still fails, the origin cell is used.
+/// Entry `b` is the bit pattern ``MortonCode`` produces for the byte value `b`
+/// placed in the first axis: its bits spread out with `dimensions - 1` gaps
+/// between them. Building the table is the only place the grid calls
+/// ``MortonCode``, so the library stays the single source of truth for the cell
+/// layout, and any change or speed-up there flows through here on the next
+/// build. Entries whose byte cannot occur for this dimension count (when fewer
+/// than eight bits are available per axis) are never read, so a zero is fine.
 ///
 	@inlinable @usableFromInline
-	static func mortonCode(for coordinate: [Int]) -> UInt64 {
-		let dimensions = coordinate.count
-		let bits = Swift.max(1, 64 / dimensions)
-		let limit: UInt64 = bits >= 64 ? .max : (UInt64(1) << UInt64(bits)) - 1
-		let clamped = coordinate.map { axis in
-			Swift.min(UInt64(Swift.max(0, axis)), limit)
+	static func spreadTable(dimensions: Int) -> [UInt64] {
+		var table = [UInt64](repeating: 0, count: 256)
+		var coordinates = [UInt64](repeating: 0, count: dimensions)
+		for byte in 0..<256 {
+			coordinates[0] = UInt64(byte)
+			table[byte] = (try? MortonCode<UInt64>(coordinates))?.value ?? 0
 		}
-		return (try? MortonCode<UInt64>(clamped))?.value ?? 0
+		return table
+	}
+
+/// The Morton code identifying a cell coordinate held in a buffer.
+///
+/// Each axis value is tiled a byte at a time through the dilation `spread`
+/// table rather than interleaved bit by bit: a byte's spread bits are shifted
+/// up by its position within the axis and by the axis's lane, then OR'd into
+/// the code. This reproduces exactly what ``MortonCode`` would encode for the
+/// whole coordinate, so build and query always agree. Coordinates are clamped
+/// to the bits available per axis so that encoding never overflows.
+///
+	@inlinable @usableFromInline
+	static func mortonCode(_ coordinate: UnsafePointer<Int>, count: Int, spread: [UInt64]) -> UInt64 {
+		let bits = Swift.max(1, 64 / count)
+		let limit: UInt64 = bits >= 64 ? .max : (UInt64(1) << UInt64(bits)) - 1
+
+		var code: UInt64 = 0
+		for dimension in 0..<count {
+			var value = UInt64(Swift.max(0, coordinate[dimension]))
+			if value > limit {
+				value = limit
+			}
+
+			// Spread each byte of the axis value, offsetting it up by the bits
+			// already consumed by lower bytes (a byte carries `8 * count` code
+			// bits), then shift the whole axis into its lane.
+			//
+			var lane: UInt64 = 0
+			var byteIndex = 0
+			while value != 0 {
+				lane |= spread[Int(value & 0xFF)] << (UInt64(byteIndex) * 8 * UInt64(count))
+				value >>= 8
+				byteIndex += 1
+			}
+			code |= lane << UInt64(dimension)
+		}
+		return code
+	}
+
+/// The Morton code identifying a cell coordinate, using this grid's dilation
+/// table.
+///
+	@inlinable @usableFromInline
+	func mortonCode(_ coordinate: UnsafePointer<Int>, count: Int) -> UInt64 {
+		Grid.mortonCode(coordinate, count: count, spread: spread)
 	}
 
 /// The cell index along a single axis containing a world coordinate, clamped
@@ -259,17 +334,6 @@ extension Grid {
 	func cellIndex(axis: Int, of coordinate: Element.Vector.Component) -> Int {
 		let index = Int(((coordinate - bounds.min[axis]) / cellSize).rounded(.down))
 		return Swift.min(Swift.max(index, 0), resolution[axis] - 1)
-	}
-
-/// The cell coordinate containing a world position, clamped into the grid.
-///
-	@inlinable @usableFromInline
-	func cellCoordinate(of position: Element.Vector) -> [Int] {
-		var coordinate = [Int](repeating: 0, count: Element.Vector.count)
-		for axis in 0..<Element.Vector.count {
-			coordinate[axis] = cellIndex(axis: axis, of: position[axis])
-		}
-		return coordinate
 	}
 
 /// The stored-element span of a cell, or nil if the cell is empty.
@@ -311,57 +375,58 @@ extension Grid {
 /// Invoke `body` for every cell coordinate in the inclusive box `lo...hi`,
 /// stopping early if `body` returns false.
 ///
+/// The coordinate is stepped through the single scratch buffer `cursor`, which
+/// is also what `body` is handed, so no allocation occurs per cell.
+///
 	@inlinable @usableFromInline
-	func forEachCell(from lo: [Int], to hi: [Int], _ body: ([Int]) -> Bool) {
-		let dimensions = lo.count
-		for axis in 0..<dimensions where hi[axis] < lo[axis] {
+	func iterateBox(lo: UnsafePointer<Int>, hi: UnsafePointer<Int>, cursor: UnsafeMutablePointer<Int>, count: Int, _ body: (UnsafePointer<Int>) -> Bool) {
+		for axis in 0..<count where hi[axis] < lo[axis] {
 			return
 		}
+		for axis in 0..<count {
+			cursor[axis] = lo[axis]
+		}
 
-		var coordinate = lo
 		while true {
-			guard body(coordinate) else {
+			guard body(UnsafePointer(cursor)) else {
 				return
 			}
 
 			// Advance the odometer over the box, carrying between axes.
 			//
 			var axis = 0
-			while axis < dimensions {
-				coordinate[axis] += 1
-				if coordinate[axis] <= hi[axis] {
+			while axis < count {
+				cursor[axis] += 1
+				if cursor[axis] <= hi[axis] {
 					break
 				}
-				coordinate[axis] = lo[axis]
+				cursor[axis] = lo[axis]
 				axis += 1
 			}
-			if axis == dimensions {
+			if axis == count {
 				return
 			}
 		}
 	}
 
 /// Invoke `body` for every element in the cells at Chebyshev distance exactly
-/// `radius` from `center`.
+/// `radius` from `center`, using the caller's scratch buffers.
 ///
 	@inlinable @usableFromInline
-	func searchShell(center: [Int], radius: Int, _ body: (Element) -> Void) {
-		let dimensions = center.count
-		var lo = [Int](repeating: 0, count: dimensions)
-		var hi = [Int](repeating: 0, count: dimensions)
-		for axis in 0..<dimensions {
+	func searchShell(center: UnsafePointer<Int>, radius: Int, lo: UnsafeMutablePointer<Int>, hi: UnsafeMutablePointer<Int>, cursor: UnsafeMutablePointer<Int>, count: Int, _ body: (Element) -> Void) {
+		for axis in 0..<count {
 			lo[axis] = Swift.max(0, center[axis] - radius)
 			hi[axis] = Swift.min(resolution[axis] - 1, center[axis] + radius)
 		}
 
-		forEachCell(from: lo, to: hi) { coordinate in
+		iterateBox(lo: lo, hi: hi, cursor: cursor, count: count) { coordinate in
 			// Only the outermost shell is new; inner cells were searched already.
 			//
 			var chebyshev = 0
-			for axis in 0..<dimensions {
+			for axis in 0..<count {
 				chebyshev = Swift.max(chebyshev, Swift.abs(coordinate[axis] - center[axis]))
 			}
-			if chebyshev == radius, let range = range(for: Grid.mortonCode(for: coordinate)) {
+			if chebyshev == radius, let range = range(for: mortonCode(coordinate, count: count)) {
 				for i in range {
 					body(elements[i])
 				}
@@ -378,9 +443,9 @@ extension Grid {
 /// searched box already spans the whole grid.
 ///
 	@inlinable @usableFromInline
-	func searchedMargin(from point: Element.Vector, center: [Int], radius: Int) -> Element.Vector.Component {
+	func searchedMargin(from point: Element.Vector, center: UnsafePointer<Int>, radius: Int, count: Int) -> Element.Vector.Component {
 		var margin = Element.Vector.Component.infinity
-		for axis in 0..<Element.Vector.count {
+		for axis in 0..<count {
 			let loCell = Swift.max(0, center[axis] - radius)
 			let hiCell = Swift.min(resolution[axis] - 1, center[axis] + radius)
 			if loCell > 0 {
@@ -422,22 +487,30 @@ extension Grid: BoundsEnumerable {
 ///
 	@inlinable
 	public func enumerate<T: Boundable>(bounds query: T, _ perform: (Element) -> Bool) where T.Vector == Element.Vector {
-		let lo = cellCoordinate(of: query.min)
-		let hi = cellCoordinate(of: query.max)
-
-		forEachCell(from: lo, to: hi) { coordinate in
-			guard let range = range(for: Grid.mortonCode(for: coordinate)) else {
-				return true
+		let dimensions = Element.Vector.count
+		withUnsafeTemporaryAllocation(of: Int.self, capacity: dimensions * 3) { scratch in
+			let lo = scratch.baseAddress!
+			let hi = lo + dimensions
+			let cursor = hi + dimensions
+			for axis in 0..<dimensions {
+				lo[axis] = cellIndex(axis: axis, of: query.min[axis])
+				hi[axis] = cellIndex(axis: axis, of: query.max[axis])
 			}
-			for i in range {
-				let element = elements[i]
-				if query.test(position: element.position) {
-					guard perform(element) else {
-						return false
+
+			iterateBox(lo: lo, hi: hi, cursor: cursor, count: dimensions) { coordinate in
+				guard let range = range(for: mortonCode(coordinate, count: dimensions)) else {
+					return true
+				}
+				for i in range {
+					let element = elements[i]
+					if query.test(position: element.position) {
+						guard perform(element) else {
+							return false
+						}
 					}
 				}
+				return true
 			}
-			return true
 		}
 	}
 }
@@ -460,31 +533,41 @@ extension Grid: Closest {
 			return nil
 		}
 
-		let center = cellCoordinate(of: element)
-		var nearest: Element?
-		var nearestDistance = Element.Vector.Component.infinity
+		let dimensions = Element.Vector.count
+		return withUnsafeTemporaryAllocation(of: Int.self, capacity: dimensions * 4) { scratch -> Element? in
+			let center = scratch.baseAddress!
+			let lo = center + dimensions
+			let hi = lo + dimensions
+			let cursor = hi + dimensions
+			for axis in 0..<dimensions {
+				center[axis] = cellIndex(axis: axis, of: element[axis])
+			}
 
-		var radius = 0
-		while true {
-			searchShell(center: center, radius: radius) { candidate in
-				let distance = squaredDistance(element, candidate.position)
-				if distance < nearestDistance {
-					nearestDistance = distance
-					nearest = candidate
+			var nearest: Element?
+			var nearestDistance = Element.Vector.Component.infinity
+
+			var radius = 0
+			while true {
+				searchShell(center: center, radius: radius, lo: lo, hi: hi, cursor: cursor, count: dimensions) { candidate in
+					let distance = squaredDistance(element, candidate.position)
+					if distance < nearestDistance {
+						nearestDistance = distance
+						nearest = candidate
+					}
 				}
+
+				let margin = searchedMargin(from: element, center: center, radius: radius, count: dimensions)
+				if margin.isInfinite {
+					break
+				}
+				if nearest != nil, margin * margin >= nearestDistance {
+					break
+				}
+				radius += 1
 			}
 
-			let margin = searchedMargin(from: element, center: center, radius: radius)
-			if margin.isInfinite {
-				break
-			}
-			if nearest != nil, margin * margin >= nearestDistance {
-				break
-			}
-			radius += 1
+			return nearest
 		}
-
-		return nearest
 	}
 }
 
@@ -556,21 +639,31 @@ extension Grid: Nearest {
 			}
 		}
 
-		let center = cellCoordinate(of: point)
-		var radius = 0
-		while true {
-			searchShell(center: center, radius: radius) { candidate in
-				consider(candidate, squaredDistance(point, candidate.position))
+		let dimensions = Element.Vector.count
+		withUnsafeTemporaryAllocation(of: Int.self, capacity: dimensions * 4) { scratch in
+			let center = scratch.baseAddress!
+			let lo = center + dimensions
+			let hi = lo + dimensions
+			let cursor = hi + dimensions
+			for axis in 0..<dimensions {
+				center[axis] = cellIndex(axis: axis, of: point[axis])
 			}
 
-			let margin = searchedMargin(from: point, center: center, radius: radius)
-			if margin.isInfinite {
-				break
+			var radius = 0
+			while true {
+				searchShell(center: center, radius: radius, lo: lo, hi: hi, cursor: cursor, count: dimensions) { candidate in
+					consider(candidate, squaredDistance(point, candidate.position))
+				}
+
+				let margin = searchedMargin(from: point, center: center, radius: radius, count: dimensions)
+				if margin.isInfinite {
+					break
+				}
+				if heap.count == count, margin * margin >= heap[0].distance {
+					break
+				}
+				radius += 1
 			}
-			if heap.count == count, margin * margin >= heap[0].distance {
-				break
-			}
-			radius += 1
 		}
 
 		return heap.sorted { $0.distance < $1.distance }.map(\.element)
@@ -597,26 +690,30 @@ extension Grid: RadiusEnumerable {
 		}
 		let radiusSquared = radius * radius
 
-		var lo = [Int](repeating: 0, count: Element.Vector.count)
-		var hi = [Int](repeating: 0, count: Element.Vector.count)
-		for axis in 0..<Element.Vector.count {
-			lo[axis] = cellIndex(axis: axis, of: point[axis] - radius)
-			hi[axis] = cellIndex(axis: axis, of: point[axis] + radius)
-		}
-
-		forEachCell(from: lo, to: hi) { coordinate in
-			guard let range = range(for: Grid.mortonCode(for: coordinate)) else {
-				return true
+		let dimensions = Element.Vector.count
+		withUnsafeTemporaryAllocation(of: Int.self, capacity: dimensions * 3) { scratch in
+			let lo = scratch.baseAddress!
+			let hi = lo + dimensions
+			let cursor = hi + dimensions
+			for axis in 0..<dimensions {
+				lo[axis] = cellIndex(axis: axis, of: point[axis] - radius)
+				hi[axis] = cellIndex(axis: axis, of: point[axis] + radius)
 			}
-			for i in range {
-				let element = elements[i]
-				if squaredDistance(point, element.position) <= radiusSquared {
-					guard perform(element) else {
-						return false
+
+			iterateBox(lo: lo, hi: hi, cursor: cursor, count: dimensions) { coordinate in
+				guard let range = range(for: mortonCode(coordinate, count: dimensions)) else {
+					return true
+				}
+				for i in range {
+					let element = elements[i]
+					if squaredDistance(point, element.position) <= radiusSquared {
+						guard perform(element) else {
+							return false
+						}
 					}
 				}
+				return true
 			}
-			return true
 		}
 	}
 }
@@ -625,12 +722,12 @@ extension Grid: RayEnumerable {
 /// Traverse the cells the ray passes through, in order of increasing distance.
 ///
 /// The ray is first clipped to the grid bounds, then stepped from cell to cell
-/// using an N-dimensional digital differential analyser. `body` is invoked with
-/// each cell coordinate the ray enters and returns `true` to continue or
-/// `false` to stop.
+/// using an N-dimensional digital differential analyser. The current cell is
+/// carried in stack scratch, and `body` is invoked with each cell coordinate
+/// the ray enters, returning `true` to continue or `false` to stop.
 ///
 	@inlinable @usableFromInline
-	func traverse(ray: Ray<Element.Vector>, _ body: ([Int]) -> Bool) {
+	func traverse(ray: Ray<Element.Vector>, _ body: (UnsafePointer<Int>) -> Bool) {
 		typealias Component = Element.Vector.Component
 		let dimensions = Element.Vector.count
 
@@ -643,57 +740,63 @@ extension Grid: RayEnumerable {
 			return
 		}
 
-		// The cell containing the point where the ray enters the grid.
-		//
-		var cell = [Int](repeating: 0, count: dimensions)
-		for axis in 0..<dimensions {
-			cell[axis] = cellIndex(axis: axis, of: ray.origin[axis] + ray.direction[axis] * enter)
-		}
+		withUnsafeTemporaryAllocation(of: Int.self, capacity: dimensions * 2) { integers in
+			let cell = integers.baseAddress!
+			let step = cell + dimensions
 
-		// Per-axis stepping: the direction to advance, the ray parameter of the
-		// next cell boundary, and the parameter increment to cross one cell.
-		//
-		var step = [Int](repeating: 0, count: dimensions)
-		var next = [Component](repeating: .infinity, count: dimensions)
-		var delta = [Component](repeating: .infinity, count: dimensions)
-		for axis in 0..<dimensions {
-			let direction = ray.direction[axis]
-			if direction > 0 {
-				step[axis] = 1
-				let face = bounds.min[axis] + Component(cell[axis] + 1) * cellSize
-				next[axis] = (face - ray.origin[axis]) / direction
-				delta[axis] = cellSize / direction
-			}
-			else if direction < 0 {
-				step[axis] = -1
-				let face = bounds.min[axis] + Component(cell[axis]) * cellSize
-				next[axis] = (face - ray.origin[axis]) / direction
-				delta[axis] = -cellSize / direction
-			}
-		}
+			withUnsafeTemporaryAllocation(of: Component.self, capacity: dimensions * 2) { reals in
+				let next = reals.baseAddress!
+				let delta = next + dimensions
 
-		var parameter = enter
-		while parameter <= exit {
-			for axis in 0..<dimensions where cell[axis] < 0 || cell[axis] >= resolution[axis] {
-				return
-			}
+				// Per-axis stepping: the cell the ray enters, the direction to
+				// advance, the ray parameter of the next cell boundary, and the
+				// parameter increment to cross one cell.
+				//
+				for axis in 0..<dimensions {
+					cell[axis] = cellIndex(axis: axis, of: ray.origin[axis] + ray.direction[axis] * enter)
+					step[axis] = 0
+					next[axis] = .infinity
+					delta[axis] = .infinity
 
-			guard body(cell) else {
-				return
-			}
+					let direction = ray.direction[axis]
+					if direction > 0 {
+						step[axis] = 1
+						let face = bounds.min[axis] + Component(cell[axis] + 1) * cellSize
+						next[axis] = (face - ray.origin[axis]) / direction
+						delta[axis] = cellSize / direction
+					}
+					else if direction < 0 {
+						step[axis] = -1
+						let face = bounds.min[axis] + Component(cell[axis]) * cellSize
+						next[axis] = (face - ray.origin[axis]) / direction
+						delta[axis] = -cellSize / direction
+					}
+				}
 
-			// Advance along the axis whose next boundary is nearest.
-			//
-			var axis = 0
-			for candidate in 1..<dimensions where next[candidate] < next[axis] {
-				axis = candidate
+				var parameter = enter
+				while parameter <= exit {
+					for axis in 0..<dimensions where cell[axis] < 0 || cell[axis] >= resolution[axis] {
+						return
+					}
+
+					guard body(UnsafePointer(cell)) else {
+						return
+					}
+
+					// Advance along the axis whose next boundary is nearest.
+					//
+					var axis = 0
+					for candidate in 1..<dimensions where next[candidate] < next[axis] {
+						axis = candidate
+					}
+					if step[axis] == 0 || next[axis].isInfinite {
+						return
+					}
+					cell[axis] += step[axis]
+					parameter = next[axis]
+					next[axis] += delta[axis]
+				}
 			}
-			if step[axis] == 0 || next[axis].isInfinite {
-				return
-			}
-			cell[axis] += step[axis]
-			parameter = next[axis]
-			next[axis] += delta[axis]
 		}
 	}
 
@@ -713,8 +816,9 @@ extension Grid: RayEnumerable {
 ///
 	@inlinable
 	public func enumerate(ray: Ray<Element.Vector>, _ perform: (Element) -> Bool) {
+		let dimensions = Element.Vector.count
 		traverse(ray: ray) { coordinate in
-			guard let range = range(for: Grid.mortonCode(for: coordinate)) else {
+			guard let range = range(for: mortonCode(coordinate, count: dimensions)) else {
 				return true
 			}
 			for i in range {
@@ -746,8 +850,9 @@ extension Grid: RayEnumerable {
 		var best: (element: Element, hit: Hit)?
 		var bestDistance = Element.Vector.Component.infinity
 
+		let dimensions = Element.Vector.count
 		traverse(ray: ray) { coordinate in
-			guard let range = range(for: Grid.mortonCode(for: coordinate)) else {
+			guard let range = range(for: mortonCode(coordinate, count: dimensions)) else {
 				return true
 			}
 			for i in range {
