@@ -12,14 +12,14 @@ import RealModule
 /// An axis-aligned bounds defined by a minimum and maximum extreme, across any
 /// number of dimensions.
 ///
-/// The dimensionality of the bounds is determined by the ``Vector`` it is
+/// The dimensionality of the bounds is determined by the `Vector` it is
 /// specialized with. A bounds specialized with a two component vector describes
 /// a rectangle, a bounds specialized with a three component vector describes a
 /// box, and so on. Any type conforming to `VectorProtocol` can be used, so the
 /// same bounds implementation works over the fast, fixed size, simd backed
 /// vectors, as well as the slower vectors of arbitrary dimension.
 ///
-/// Most operations require the ``Vector`` to conform to `VectorMath`, as they
+/// Most operations require the `Vector` to conform to `VectorMath`, as they
 /// depend on component-wise arithmetic and comparison. These are exposed
 /// conditionally, so the bounds remains usable, if limited, over any vector.
 ///

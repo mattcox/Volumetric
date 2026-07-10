@@ -13,13 +13,13 @@ import RealModule
 
 /// A uniform spatial grid over a collection of positioned elements.
 ///
-/// Where a ``BVH`` partitions elements that have extent, a grid partitions
+/// Where a `BVH` partitions elements that have extent, a grid partitions
 /// elements that occupy a single point — the natural structure for point
 /// clouds, particle systems, and fixed-radius neighbour search. Each element
 /// is binned into exactly one cell of a regular lattice.
 ///
 /// The grid is an immutable value type. It is constructed once from a sequence
-/// of ``Positionable`` elements, then is read-only and freely queryable. To
+/// of `Positionable` elements, then is read-only and freely queryable. To
 /// change its contents, build a new grid — because a rebuild is a sort plus a
 /// linear pass, this is cheap enough to do every frame for fully dynamic data.
 ///
@@ -481,7 +481,7 @@ extension Grid: BoundsEnumerable {
 /// enumerating or `false` to stop early.
 ///
 /// - Parameters:
-///   - bounds: The bounds to test element positions against.
+///   - query: The bounds to test element positions against.
 ///   - perform: A closure invoked with each element inside the bounds. Return
 ///     `true` to continue, or `false` to stop enumeration.
 ///
