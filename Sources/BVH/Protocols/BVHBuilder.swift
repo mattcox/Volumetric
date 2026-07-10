@@ -36,5 +36,5 @@ public protocol BVHBuilder {
 /// - Returns: The intermediate hierarchy for the `BVH` to flatten into its
 ///   canonical linear form.
 ///
-	func build<Element: Boundable>(_ elements: [Element], bounds: Bounds<Element.Vector>) -> BVH<Element>.BuildTree where Element.Vector: VectorMath, Element.Vector.Component: Real & SIMDScalar & BinaryFloatingPoint
+	func build<Element: Boundable>(_ elements: [Element], bounds: Bounds<Element.Vector>) -> BVH<Element>.BuildTree where Element.Vector: VectorMath & Sendable, Element.Vector.Component: Real & SIMDScalar & BinaryFloatingPoint & Sendable
 }

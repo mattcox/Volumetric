@@ -56,7 +56,7 @@ public struct BinnedSAH: BVHBuilder {
 	}
 
 	@inlinable
-	public func build<Element: Boundable>(_ elements: [Element], bounds: Bounds<Element.Vector>) -> BVH<Element>.BuildTree where Element.Vector: VectorMath, Element.Vector.Component: Real & SIMDScalar & BinaryFloatingPoint {
+	public func build<Element: Boundable>(_ elements: [Element], bounds: Bounds<Element.Vector>) -> BVH<Element>.BuildTree where Element.Vector: VectorMath & Sendable, Element.Vector.Component: Real & SIMDScalar & BinaryFloatingPoint & Sendable {
 		typealias Vector = Element.Vector
 		typealias Component = Vector.Component
 		typealias Tree = BVH<Element>.BuildTree

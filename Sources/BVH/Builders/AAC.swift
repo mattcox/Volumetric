@@ -131,7 +131,7 @@ public struct AAC: BVHBuilder {
 	}
 
 	@inlinable
-	public func build<Element: Boundable>(_ elements: [Element], bounds: Bounds<Element.Vector>) -> BVH<Element>.BuildTree where Element.Vector: VectorMath, Element.Vector.Component: Real & SIMDScalar & BinaryFloatingPoint {
+	public func build<Element: Boundable>(_ elements: [Element], bounds: Bounds<Element.Vector>) -> BVH<Element>.BuildTree where Element.Vector: VectorMath & Sendable, Element.Vector.Component: Real & SIMDScalar & BinaryFloatingPoint & Sendable {
 		typealias Vector = Element.Vector
 		typealias Component = Vector.Component
 		typealias Tree = BVH<Element>.BuildTree
@@ -142,12 +142,11 @@ public struct AAC: BVHBuilder {
 		//
 		let delta = self.delta
 
-		// `Bounds<Vector>` is not statically `Sendable` for an arbitrary
-		// `VectorMath`, but the parallel halves only ever read this array, so the
-		// capture is safe. `sortedElements`/`sortedCodes` are immutable and
-		// trivially `Sendable`.
+		// `Vector: Sendable` makes `Bounds<Vector>` `Sendable`, so this immutable
+		// array is freely shareable by the parallel halves, as are the immutable
+		// `sortedElements`/`sortedCodes`.
 		//
-		nonisolated(unsafe) let elementBounds = elements.map { Bounds<Vector>($0) }
+		let elementBounds = elements.map { Bounds<Vector>($0) }
 
 		// Quantize each centroid into the root bounds and interleave it into a
 		// Morton code, guarding zero-extent axes against a divide by zero.
@@ -399,7 +398,11 @@ public struct AAC: BVHBuilder {
 				//
 				var halves: [[Node]?] = [nil, nil]
 				halves.withUnsafeMutableBufferPointer { buffer in
-					let base = buffer.baseAddress!
+					// The two iterations write disjoint slots (0 and 1), so sharing
+					// this pointer across them cannot race; `concurrentPerform`'s
+					// barrier orders the writes before the results are read back.
+					//
+					nonisolated(unsafe) let base = buffer.baseAddress!
 					DispatchQueue.concurrentPerform(iterations: 2) { index in
 						let span = index == 0 ? (first, split) : (split + 1, last)
 						(base + index).pointee = buildTree(span.0, span.1, depth + 1)

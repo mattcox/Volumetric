@@ -131,7 +131,7 @@ public struct BVH<Element: Boundable> where Element.Vector: VectorMath, Element.
 ///   - builder: The strategy used to build the hierarchy.
 ///
 	@inlinable
-	public init?<T: Sequence>(_ sequence: T, using builder: some BVHBuilder) where T.Element == Element {
+	public init?<T: Sequence>(_ sequence: T, using builder: some BVHBuilder) where T.Element == Element, Element.Vector: Sendable, Element.Vector.Component: Sendable {
 		let elements = Array(sequence)
 		guard elements.isEmpty == false else {
 			return nil
