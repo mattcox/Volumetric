@@ -8,6 +8,7 @@
 //  Shared helpers reused across benchmark subcommands.
 //
 
+import Dispatch
 import Foundation
 
 /// A small, deterministic linear congruential generator, so scenes and queries
@@ -26,11 +27,16 @@ struct LCG: RandomNumberGenerator {
 	}
 }
 
-/// The number of milliseconds represented by a `Duration`.
+/// The elapsed wall-clock time, in milliseconds, of running `body`.
 ///
-func milliseconds(_ duration: Duration) -> Double {
-	let components = duration.components
-	return Double(components.seconds) * 1_000 + Double(components.attoseconds) / 1_000_000_000_000_000
+/// Uses `DispatchTime` rather than `ContinuousClock` so the benchmark carries no
+/// minimum-OS requirement, and therefore imposes none on the package.
+///
+func measure(_ body: () -> Void) -> Double {
+	let start = DispatchTime.now()
+	body()
+	let end = DispatchTime.now()
+	return Double(end.uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
 }
 
 /// Pad `text` to `width` columns, on the right by default or on the left when

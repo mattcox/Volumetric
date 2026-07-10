@@ -141,18 +141,16 @@ private func analyze(_ tree: BVH<Element>.BuildTree) -> (sah: Double, nodes: Int
 }
 
 private func evaluate<B: BVHBuilder>(_ builder: B, elements: [Element], bounds: Element, rays: [Ray<Vec>], runs: Int) -> Stats {
-	let clock = ContinuousClock()
-
 	// Time full BVH construction, keeping the best of several runs.
 	//
 	var bestBuild = Double.infinity
 	var bvh: BVH<Element>?
 	for _ in 0..<runs {
 		var built: BVH<Element>?
-		let elapsed = clock.measure {
+		let elapsed = measure {
 			built = BVH(elements, using: builder)
 		}
-		bestBuild = Swift.min(bestBuild, milliseconds(elapsed))
+		bestBuild = Swift.min(bestBuild, elapsed)
 		bvh = built
 	}
 
@@ -165,10 +163,10 @@ private func evaluate<B: BVHBuilder>(_ builder: B, elements: [Element], bounds: 
 	if let bvh {
 		for _ in 0..<runs {
 			var refit: BVH<Element>?
-			let elapsed = clock.measure {
+			let elapsed = measure {
 				refit = bvh.refitted(with: moved)
 			}
-			bestRefit = Swift.min(bestRefit, milliseconds(elapsed))
+			bestRefit = Swift.min(bestRefit, elapsed)
 			_ = refit
 		}
 	}

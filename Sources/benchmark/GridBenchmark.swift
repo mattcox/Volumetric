@@ -134,10 +134,10 @@ private struct Stats {
 	var sink: Int
 }
 
-private func bestOf(_ runs: Int, _ clock: ContinuousClock, _ body: () -> Void) -> Double {
+private func bestOf(_ runs: Int, _ body: () -> Void) -> Double {
 	var best = Double.infinity
 	for _ in 0..<Swift.max(1, runs) {
-		best = Swift.min(best, milliseconds(clock.measure(body)))
+		best = Swift.min(best, measure(body))
 	}
 	return best
 }
@@ -148,14 +148,13 @@ private func bestOf(_ runs: Int, _ clock: ContinuousClock, _ body: () -> Void) -
 private let sphereRadius: Scalar = 4
 
 private func evaluateGrid(points: [Vec], queries: [Vec], rays: [Ray<Vec>], k: Int, searchRadius: Scalar, runs: Int) -> Stats {
-	let clock = ContinuousClock()
 	let particles = points.map { Particle(position: $0) }
 
 	var buildBest = Double.infinity
 	var grid: Grid<Particle>?
 	for _ in 0..<runs {
 		var built: Grid<Particle>?
-		buildBest = Swift.min(buildBest, milliseconds(clock.measure { built = Grid(particles) }))
+		buildBest = Swift.min(buildBest, measure { built = Grid(particles) })
 		grid = built
 	}
 	guard let grid else {
@@ -163,22 +162,22 @@ private func evaluateGrid(points: [Vec], queries: [Vec], rays: [Ray<Vec>], k: In
 	}
 
 	var sink = 0
-	let closest = bestOf(runs, clock) {
+	let closest = bestOf(runs) {
 		for query in queries where grid.closest(to: query) != nil {
 			sink += 1
 		}
 	}
-	let nearest = bestOf(runs, clock) {
+	let nearest = bestOf(runs) {
 		for query in queries {
 			sink += grid.nearest(k, to: query).count
 		}
 	}
-	let radius = bestOf(runs, clock) {
+	let radius = bestOf(runs) {
 		for query in queries {
 			sink += grid.elements(within: searchRadius, of: query).count
 		}
 	}
-	let ray = bestOf(runs, clock) {
+	let ray = bestOf(runs) {
 		for ray in rays {
 			let hit = grid.hit(ray: ray) { particle in
 				raySphere(ray, centre: particle.position, radius: sphereRadius).map { (distance: $0, hit: 0) }
@@ -193,8 +192,6 @@ private func evaluateGrid(points: [Vec], queries: [Vec], rays: [Ray<Vec>], k: In
 }
 
 private func evaluateBVH(points: [Vec], queries: [Vec], rays: [Ray<Vec>], k: Int, searchRadius: Scalar, runs: Int) -> Stats {
-	let clock = ContinuousClock()
-
 	// Bound each point by the sphere it represents, so the BVH answers the same
 	// ray/sphere query the grid does.
 	//
@@ -204,7 +201,7 @@ private func evaluateBVH(points: [Vec], queries: [Vec], rays: [Ray<Vec>], k: Int
 	var bvh: BVH<Bounds<Vec>>?
 	for _ in 0..<runs {
 		var built: BVH<Bounds<Vec>>?
-		buildBest = Swift.min(buildBest, milliseconds(clock.measure { built = BVH(boxes, using: .binnedSAH) }))
+		buildBest = Swift.min(buildBest, measure { built = BVH(boxes, using: .binnedSAH) })
 		bvh = built
 	}
 	guard let bvh else {
@@ -212,22 +209,22 @@ private func evaluateBVH(points: [Vec], queries: [Vec], rays: [Ray<Vec>], k: Int
 	}
 
 	var sink = 0
-	let closest = bestOf(runs, clock) {
+	let closest = bestOf(runs) {
 		for query in queries where bvh.closest(to: query) != nil {
 			sink += 1
 		}
 	}
-	let nearest = bestOf(runs, clock) {
+	let nearest = bestOf(runs) {
 		for query in queries {
 			sink += bvh.nearest(k, to: query).count
 		}
 	}
-	let radius = bestOf(runs, clock) {
+	let radius = bestOf(runs) {
 		for query in queries {
 			sink += bvh.elements(within: searchRadius, of: query).count
 		}
 	}
-	let ray = bestOf(runs, clock) {
+	let ray = bestOf(runs) {
 		for ray in rays {
 			let hit = bvh.hit(ray: ray) { box in
 				raySphere(ray, centre: box.center, radius: sphereRadius).map { (distance: $0, hit: 0) }

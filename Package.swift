@@ -4,10 +4,6 @@ import PackageDescription
 
 let package = Package(
 	name: "Volumetric",
-	platforms: [
-		.macOS(.v13),
-		.iOS(.v13)
-	],
 	products: [
 		.library(
 			name: "VolumetricCore",
@@ -89,15 +85,25 @@ let package = Package(
 				"VolumetricGrid"
 			]
 		),
-		.executableTarget(
-			name: "benchmark",
-			dependencies: [
-				"Cartesian",
-				"VolumetricCore",
-				"VolumetricBVH",
-				"VolumetricGrid",
-				.product(name: "ArgumentParser", package: "swift-argument-parser")
-			]
-		),
 	]
 )
+
+// The benchmark is a development-only executable, built solely when compiling on
+// a macOS host. Gating it here — rather than via a package-wide `platforms`
+// floor — keeps the libraries free of any minimum-OS requirement; the benchmark
+// itself uses Dispatch-based timing so it needs no elevated deployment target.
+//
+#if os(macOS)
+package.targets.append(
+	.executableTarget(
+		name: "benchmark",
+		dependencies: [
+			"Cartesian",
+			"VolumetricCore",
+			"VolumetricBVH",
+			"VolumetricGrid",
+			.product(name: "ArgumentParser", package: "swift-argument-parser")
+		]
+	)
+)
+#endif
