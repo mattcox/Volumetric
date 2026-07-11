@@ -300,6 +300,146 @@ func rayHitFindsNearestSphere() throws {
 	#expect(hit?.hit == bruteNearest?.hit)
 }
 
+// MARK: - Morton collisions
+
+@Test
+func mortonCollisionsAreDisambiguated() throws {
+	// The Morton code affords 64 / dimensions bits per axis — 16 in 4D — so cell
+	// indices above 65535 clamp onto the same code. A grid whose resolution
+	// exceeds that budget therefore has colliding cells, and lookups must fall
+	// back to verifying the cell coordinate rather than trusting the code.
+	//
+	let reference = Point(identifier: 0, position: Vector4<Double>(0, 0, 0, 0))
+	let a = Point(identifier: 1, position: Vector4<Double>(66_000, 0, 0, 0))
+	let b = Point(identifier: 2, position: Vector4<Double>(70_000, 0, 0, 0))
+	let grid = try #require(Grid([reference, a, b], cellSize: 1))
+
+	// `a` (cell 66000) and `b` (cell 69999, clamped) both exceed the 16-bit
+	// budget and so share a code.
+	//
+	#expect(grid.hasCollisions)
+
+	func cellRange(_ coordinate: [Int]) -> Range<Int>? {
+		coordinate.withUnsafeBufferPointer { grid.range(for: $0.baseAddress!, count: 4) }
+	}
+	func identifiers(_ range: Range<Int>?) -> [Int] {
+		(range ?? 0..<0).map { grid[$0].identifier }
+	}
+
+	// Each colliding cell resolves to exactly its own element, never the other's.
+	//
+	#expect(identifiers(cellRange([66_000, 0, 0, 0])) == [1])
+	#expect(identifiers(cellRange([69_999, 0, 0, 0])) == [2])
+
+	// An empty cell that also collides onto the shared code borrows neither.
+	//
+	#expect(cellRange([67_000, 0, 0, 0]) == nil)
+
+	// The distinct, non-colliding cell is unaffected.
+	//
+	#expect(identifiers(cellRange([0, 0, 0, 0])) == [0])
+
+	// End-to-end queries stay correct through the collision.
+	//
+	#expect(grid.closest(to: Vector4<Double>(66_000, 0, 0, 0))?.identifier == 1)
+	#expect(grid.closest(to: Vector4<Double>(70_000, 0, 0, 0))?.identifier == 2)
+}
+
+// MARK: - Ray margin
+
+@Test
+func rayHitMarginFindsOffAxisSphere() throws {
+	// A sphere binned one cell off the ray's centre line, but whose radius still
+	// reaches the ray. The centre-line traversal never enters its cell, so a
+	// plain hit misses it; a margin equal to the radius widens the traversal to
+	// find it.
+	//
+	let ray = Ray(origin: Vector3<Double>(x: -100, y: 0, z: 0), direction: Vector3<Double>(x: 1, y: 0, z: 0))
+
+	// Anchors sit off the ray in z so they shape the bounds without ever being
+	// hit; the target sits one cell up in y, close enough for its sphere to graze
+	// the ray.
+	//
+	let anchorA = Point(identifier: 10, position: Vector3<Double>(x: 0, y: 0, z: 50))
+	let anchorB = Point(identifier: 11, position: Vector3<Double>(x: 100, y: 0, z: 50))
+	let target  = Point(identifier: 99, position: Vector3<Double>(x: 50, y: 12, z: 0))
+	let grid = try #require(Grid([anchorA, anchorB, target], cellSize: 10))
+
+	let radii: [Int: Double] = [10: 5, 11: 5, 99: 15]
+	func raySphere(_ point: Point<Vector3<Double>>) -> (distance: Double, hit: Int)? {
+		let radius = radii[point.identifier]!
+		let oc = ray.origin - point.position
+		let a = ray.direction[0] * ray.direction[0] + ray.direction[1] * ray.direction[1] + ray.direction[2] * ray.direction[2]
+		let b = 2 * (oc[0] * ray.direction[0] + oc[1] * ray.direction[1] + oc[2] * ray.direction[2])
+		let c = (oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2]) - radius * radius
+		let discriminant = b * b - 4 * a * c
+		guard discriminant >= 0 else {
+			return nil
+		}
+		let root = discriminant.squareRoot()
+		let near = (-b - root) / (2 * a)
+		if near >= 0 {
+			return (distance: near, hit: point.identifier)
+		}
+		let far = (-b + root) / (2 * a)
+		return far >= 0 ? (distance: far, hit: point.identifier) : nil
+	}
+
+	// The target's sphere reaches the ray (perpendicular gap 12 < radius 15), so
+	// the query is genuinely answerable.
+	//
+	#expect(raySphere(target) != nil)
+
+	// Without a margin the target's cell is never entered, so it is missed; the
+	// anchors miss too, so there is no hit at all.
+	//
+	#expect(grid.hit(ray: ray, raySphere) == nil)
+
+	// A margin covering the radius widens the traversal to reach the target.
+	//
+	#expect(grid.hit(ray: ray, margin: 15, raySphere)?.hit == 99)
+}
+
+@Test
+func rayEnumerateMarginReachesOffAxisAndNeverDuplicates() throws {
+	// A dense slab of points around a ray. The plain enumeration only visits the
+	// cells the centre line crosses; a margin widens it to the neighbouring
+	// cells, where overlapping neighbourhoods would double-report were the
+	// traversal not de-duplicated.
+	//
+	var points: [Point<Vector3<Double>>] = []
+	var identifier = 0
+	for x in stride(from: 0, through: 100, by: 5) {
+		for y in stride(from: -20, through: 20, by: 5) {
+			points.append(Point(identifier: identifier, position: Vector3<Double>(x: Double(x), y: Double(y), z: 0)))
+			identifier += 1
+		}
+	}
+	let grid = try #require(Grid(points, cellSize: 10))
+	let ray = Ray(origin: Vector3<Double>(x: -100, y: 0, z: 0), direction: Vector3<Double>(x: 1, y: 0, z: 0))
+
+	func collect(margin: Double) -> [Int] {
+		var found: [Int] = []
+		grid.enumerate(ray: ray, margin: margin) { found.append($0.identifier); return true }
+		return found
+	}
+
+	let narrow = collect(margin: 0)
+	let wide = collect(margin: 20)
+
+	// No element is reported twice, at either margin.
+	//
+	#expect(narrow.count == Set(narrow).count)
+	#expect(wide.count == Set(wide).count)
+
+	// Widening only ever adds candidates, and reaches points the centre line
+	// never passed (any point with |y| > 5 sits outside the ray's row of cells).
+	//
+	#expect(Set(narrow).isSubset(of: Set(wide)))
+	#expect(wide.count > narrow.count)
+	#expect(wide.contains { points[$0].position.y >= 15 })
+}
+
 // MARK: - Degenerate
 
 @Test

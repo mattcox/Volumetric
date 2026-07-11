@@ -297,18 +297,23 @@ extension Bounds where Vector: VectorMath {
 /// Deflate the bounds by the specified scalar amount.
 ///
 /// The bounds will be shrunk by the provided scalar amount in all directions.
+/// Deflation is clamped at zero width: an axis shrunk by more than its own
+/// extent collapses to its midpoint rather than inverting, so the sorted
+/// invariant always holds.
 ///
 /// - Parameters:
 ///   - amount: The scalar amount to deflate the bounds by.
 ///
+	@inlinable
 	mutating public func deflate(by amount: Vector.Component) {
-		self = Bounds(min: min + amount, max: max - amount)
+		self = deflated(by: amount)
 	}
 
 /// Deflate the bounds by the specified scalar amount.
 ///
 /// A new bounds will be returned that has been shrunk by the provided scalar
-/// amount in all directions.
+/// amount in all directions. Deflation is clamped at zero width: an axis shrunk
+/// by more than its own extent collapses to its midpoint rather than inverting.
 ///
 /// - Parameters:
 ///   - amount: The scalar amount to deflate the bounds by.
@@ -317,7 +322,11 @@ extension Bounds where Vector: VectorMath {
 ///
 	@inlinable
 	public func deflated(by amount: Vector.Component) -> Self {
-		Bounds(min: min + amount, max: max - amount)
+		// The midpoint each axis collapses toward once it is deflated past its
+		// own extent. Clamping the shrunk extremes to it keeps `min <= max`.
+		//
+		let mid = ((max - min) / 2) + min
+		return Bounds(min: Vector.min(min + amount, mid), max: Vector.max(max - amount, mid))
 	}
 
 /// Compute a union of two bounds, forming a new bounds that encapsulates

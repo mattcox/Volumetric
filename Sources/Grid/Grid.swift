@@ -115,10 +115,23 @@ public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Elem
 	@usableFromInline
 	let spread: [UInt64]
 
+/// Whether any two distinct cells share a Morton code.
+///
+/// The code is only injective while each axis' resolution fits the bits the
+/// dilation affords it (`64 / dimensions`). Beyond that — a very fine grid, or
+/// a high dimension count — distinct cells can collide onto one code. When they
+/// do, a lookup can no longer trust the code alone and must verify the cell
+/// coordinate; this flag records whether that verification is needed, so the
+/// common, collision-free case keeps its single binary search. See
+/// ``range(for:count:)``.
+///
+	@usableFromInline
+	let hasCollisions: Bool
+
 /// Initialize a grid directly from its computed storage.
 ///
 	@inlinable
-	init(bounds: Bounds<Element.Vector>, cellSize: Element.Vector.Component, resolution: [Int], cells: [Cell], elements: [Element], ordering: [Int], spread: [UInt64]) {
+	init(bounds: Bounds<Element.Vector>, cellSize: Element.Vector.Component, resolution: [Int], cells: [Cell], elements: [Element], ordering: [Int], spread: [UInt64], hasCollisions: Bool) {
 		self.bounds = bounds
 		self.cellSize = cellSize
 		self.resolution = resolution
@@ -126,6 +139,7 @@ public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Elem
 		self.elements = elements
 		self.ordering = ordering
 		self.spread = spread
+		self.hasCollisions = hasCollisions
 	}
 
 /// Initialize a grid over a sequence of elements, using a fixed cell size.
@@ -172,46 +186,110 @@ public struct Grid<Element: Positionable> where Element.Vector: VectorMath, Elem
 		let dimensions = Vector.count
 		let spread = Grid.spreadTable(dimensions: dimensions)
 
-		// Assign each element a cell code, reusing one scratch coordinate for the
-		// whole pass, then order the elements by that code so that a cell's
-		// elements form a contiguous span.
+		// The Morton code affords `64 / dimensions` bits per axis, so a cell index
+		// is represented uniquely only while the axis holds at most `2 ^ bits`
+		// cells. A code can therefore collide only if some axis' resolution exceeds
+		// that — a very fine grid, or a high dimension count. When no axis can
+		// overflow, collisions are impossible and the whole coordinate-tracking
+		// path below is skipped, leaving the common case exactly as cheap as a
+		// plain code sort.
+		//
+		let bitsPerAxis = Swift.max(1, 64 / dimensions)
+		let representableCells = bitsPerAxis >= 63 ? Int.max : (1 << bitsPerAxis)
+		let canCollide = resolution.contains { $0 > representableCells }
+
+		// Assign each element a cell code. When codes can collide, the integer cell
+		// coordinate is retained alongside it — the authoritative cell identity —
+		// so equal cells can be grouped exactly and colliding ones kept apart.
 		//
 		var codes = [UInt64](repeating: 0, count: elements.count)
+		var coordinates = canCollide ? [Int](repeating: 0, count: elements.count * dimensions) : []
 		withUnsafeTemporaryAllocation(of: Int.self, capacity: dimensions) { scratch in
 			let coordinate = scratch.baseAddress!
 			for index in elements.indices {
 				let position = elements[index].position
 				for axis in 0..<dimensions {
 					let cell = Int(((position[axis] - bounds.min[axis]) / size).rounded(.down))
-					coordinate[axis] = Swift.min(Swift.max(cell, 0), resolution[axis] - 1)
+					let clamped = Swift.min(Swift.max(cell, 0), resolution[axis] - 1)
+					coordinate[axis] = clamped
+					if canCollide {
+						coordinates[index * dimensions + axis] = clamped
+					}
 				}
 				codes[index] = Grid.mortonCode(coordinate, count: dimensions, spread: spread)
 			}
 		}
 
+		// Two elements share a cell exactly when their coordinates match on every
+		// axis.
+		//
+		func sameCell(_ a: Int, _ b: Int) -> Bool {
+			for axis in 0..<dimensions where coordinates[a * dimensions + axis] != coordinates[b * dimensions + axis] {
+				return false
+			}
+			return true
+		}
+
+		// Order by code. When codes can collide, ties are broken by coordinate so
+		// that every cell — even ones sharing a colliding code — forms a single
+		// contiguous span.
+		//
 		var order = Array(elements.indices)
-		order.sort {
-			codes[$0] < codes[$1]
+		if canCollide {
+			order.sort { lhs, rhs in
+				if codes[lhs] != codes[rhs] {
+					return codes[lhs] < codes[rhs]
+				}
+				for axis in 0..<dimensions {
+					let a = coordinates[lhs * dimensions + axis]
+					let b = coordinates[rhs * dimensions + axis]
+					if a != b {
+						return a < b
+					}
+				}
+				return false
+			}
+		}
+		else {
+			order.sort {
+				codes[$0] < codes[$1]
+			}
 		}
 
 		let storedElements = order.map { elements[$0] }
 		let sortedCodes = order.map { codes[$0] }
 
-		// Collapse each run of equal codes into one directory entry.
+		// Collapse each run of same-cell elements into one directory entry. When
+		// codes can collide a run ends at a change of coordinate, not merely of
+		// code — so colliding cells stay distinct — and any two adjacent entries
+		// sharing a code flag that lookups must verify coordinates. Otherwise a run
+		// of equal codes is exactly one cell.
 		//
 		var cells: [Cell] = []
+		var hasCollisions = false
 		var index = 0
 		while index < order.count {
 			let code = sortedCodes[index]
 			var end = index + 1
-			while end < order.count, sortedCodes[end] == code {
+			guard canCollide else {
+				while end < order.count, sortedCodes[end] == code {
+					end += 1
+				}
+				cells.append(Cell(code: code, start: index, count: end - index))
+				index = end
+				continue
+			}
+			while end < order.count, sortedCodes[end] == code, sameCell(order[end], order[index]) {
 				end += 1
+			}
+			if end < order.count, sortedCodes[end] == code {
+				hasCollisions = true
 			}
 			cells.append(Cell(code: code, start: index, count: end - index))
 			index = end
 		}
 
-		self.init(bounds: bounds, cellSize: size, resolution: resolution, cells: cells, elements: storedElements, ordering: order, spread: spread)
+		self.init(bounds: bounds, cellSize: size, resolution: resolution, cells: cells, elements: storedElements, ordering: order, spread: spread, hasCollisions: hasCollisions)
 	}
 
 /// Initialize a grid over a sequence of elements, choosing a cell size
@@ -336,26 +414,80 @@ extension Grid {
 		return Swift.min(Swift.max(index, 0), resolution[axis] - 1)
 	}
 
-/// The stored-element span of a cell, or nil if the cell is empty.
+/// Whether a directory entry describes the given cell coordinate.
 ///
-/// The directory is sorted by code, so the lookup is a binary search.
+/// The entry's coordinate is recomputed from its first stored element rather
+/// than stored — every element in the cell shares it, and the mapping matches
+/// the one used at build. Only consulted to disambiguate colliding codes.
 ///
 	@inlinable
-	func range(for code: UInt64) -> Range<Int>? {
+	func cell(_ cell: Cell, matches coordinate: UnsafePointer<Int>, count: Int) -> Bool {
+		let position = elements[cell.start].position
+		for axis in 0..<count where cellIndex(axis: axis, of: position[axis]) != coordinate[axis] {
+			return false
+		}
+		return true
+	}
+
+/// The stored-element span of a cell coordinate, or nil if the cell is empty.
+///
+/// The directory is sorted by code, so the code is found by binary search. When
+/// no codes collide (``hasCollisions`` is false) that entry is the answer. When
+/// they do, the short run of entries sharing the code is scanned for the one
+/// whose coordinate matches, so a colliding lookup stays correct — never
+/// returning a different cell's elements or the same cell twice.
+///
+	@inlinable
+	func range(for coordinate: UnsafePointer<Int>, count: Int) -> Range<Int>? {
+		let code = mortonCode(coordinate, count: count)
+
+		// The common case: codes are unique, so an exact-match binary search
+		// returns the one entry — bailing out the moment it is found.
+		//
+		guard hasCollisions else {
+			var low = 0
+			var high = cells.count
+			while low < high {
+				let mid = low + (high - low) / 2
+				let midCode = cells[mid].code
+				if midCode < code {
+					low = mid + 1
+				}
+				else if midCode > code {
+					high = mid
+				}
+				else {
+					return cells[mid].start..<(cells[mid].start + cells[mid].count)
+				}
+			}
+			return nil
+		}
+
+		// Codes can collide: find the first entry with this code, then scan the
+		// short run sharing it for the one whose coordinate matches.
+		//
 		var low = 0
 		var high = cells.count
 		while low < high {
 			let mid = low + (high - low) / 2
-			let midCode = cells[mid].code
-			if midCode < code {
+			if cells[mid].code < code {
 				low = mid + 1
 			}
-			else if midCode > code {
+			else {
 				high = mid
 			}
-			else {
-				return cells[mid].start..<(cells[mid].start + cells[mid].count)
+		}
+
+		guard low < cells.count, cells[low].code == code else {
+			return nil
+		}
+
+		var index = low
+		while index < cells.count, cells[index].code == code {
+			if cell(cells[index], matches: coordinate, count: count) {
+				return cells[index].start..<(cells[index].start + cells[index].count)
 			}
+			index += 1
 		}
 		return nil
 	}
@@ -426,7 +558,7 @@ extension Grid {
 			for axis in 0..<count {
 				chebyshev = Swift.max(chebyshev, Swift.abs(coordinate[axis] - center[axis]))
 			}
-			if chebyshev == radius, let range = range(for: mortonCode(coordinate, count: count)) {
+			if chebyshev == radius, let range = range(for: coordinate, count: count) {
 				for i in range {
 					body(elements[i])
 				}
@@ -498,7 +630,7 @@ extension Grid: BoundsEnumerable {
 			}
 
 			iterateBox(lo: lo, hi: hi, cursor: cursor, count: dimensions) { coordinate in
-				guard let range = range(for: mortonCode(coordinate, count: dimensions)) else {
+				guard let range = range(for: coordinate, count: dimensions) else {
 					return true
 				}
 				for i in range {
@@ -701,7 +833,7 @@ extension Grid: RadiusEnumerable {
 			}
 
 			iterateBox(lo: lo, hi: hi, cursor: cursor, count: dimensions) { coordinate in
-				guard let range = range(for: mortonCode(coordinate, count: dimensions)) else {
+				guard let range = range(for: coordinate, count: dimensions) else {
 					return true
 				}
 				for i in range {
@@ -726,8 +858,15 @@ extension Grid: RayEnumerable {
 /// carried in stack scratch, and `body` is invoked with each cell coordinate
 /// the ray enters, returning `true` to continue or `false` to stop.
 ///
+/// A positive `radius` widens the traversal into a tube: at each stepped cell,
+/// every cell within Chebyshev distance `radius` is also reported, so a caller
+/// can catch elements lying just off the ray's centre line. Because the
+/// neighbourhoods of successive steps overlap, a cell may be reported more than
+/// once at `radius > 0`; a `radius` of zero visits each crossed cell exactly
+/// once.
+///
 	@inlinable
-	func traverse(ray: Ray<Element.Vector>, _ body: (UnsafePointer<Int>) -> Bool) {
+	func traverse(ray: Ray<Element.Vector>, radius: Int = 0, _ body: (UnsafePointer<Int>) -> Bool) {
 		typealias Component = Element.Vector.Component
 		let dimensions = Element.Vector.count
 
@@ -740,9 +879,34 @@ extension Grid: RayEnumerable {
 			return
 		}
 
-		withUnsafeTemporaryAllocation(of: Int.self, capacity: dimensions * 2) { integers in
+		// `cell`/`step` drive the DDA; `nlo`/`nhi`/`ncur` are the neighbourhood
+		// odometer, used only when `radius` is positive.
+		//
+		withUnsafeTemporaryAllocation(of: Int.self, capacity: dimensions * 5) { integers in
 			let cell = integers.baseAddress!
 			let step = cell + dimensions
+			let nlo = step + dimensions
+			let nhi = nlo + dimensions
+			let ncur = nhi + dimensions
+
+			// Report a stepped cell — either the cell itself, or, for a widened
+			// traversal, every cell within `radius` of it.
+			//
+			func visit(_ center: UnsafePointer<Int>) -> Bool {
+				guard radius > 0 else {
+					return body(center)
+				}
+				for axis in 0..<dimensions {
+					nlo[axis] = Swift.max(0, center[axis] - radius)
+					nhi[axis] = Swift.min(resolution[axis] - 1, center[axis] + radius)
+				}
+				var keepGoing = true
+				iterateBox(lo: nlo, hi: nhi, cursor: ncur, count: dimensions) { coordinate in
+					keepGoing = body(coordinate)
+					return keepGoing
+				}
+				return keepGoing
+			}
 
 			withUnsafeTemporaryAllocation(of: Component.self, capacity: dimensions * 2) { reals in
 				let next = reals.baseAddress!
@@ -779,7 +943,7 @@ extension Grid: RayEnumerable {
 						return
 					}
 
-					guard body(UnsafePointer(cell)) else {
+					guard visit(UnsafePointer(cell)) else {
 						return
 					}
 
@@ -800,6 +964,21 @@ extension Grid: RayEnumerable {
 		}
 	}
 
+/// The neighbourhood radius, in cells, that covers a world-space margin.
+///
+/// A cell radius of `ceil(margin / cellSize) + 1` is guaranteed to include
+/// every cell lying within `margin` of the ray, allowing for an element sitting
+/// anywhere within its cell. A non-positive or non-finite margin needs no
+/// widening.
+///
+	@inlinable
+	func cellRadius(for margin: Element.Vector.Component) -> Int {
+		guard margin > 0, margin.isFinite else {
+			return 0
+		}
+		return Int((margin / cellSize).rounded(.up)) + 1
+	}
+
 /// Enumerate every element in a cell the ray passes through, in roughly
 /// front-to-back order.
 ///
@@ -816,9 +995,60 @@ extension Grid: RayEnumerable {
 ///
 	@inlinable
 	public func enumerate(ray: Ray<Element.Vector>, _ perform: (Element) -> Bool) {
+		enumerate(ray: ray, margin: 0, perform)
+	}
+
+/// Enumerate every element in a cell within a margin of the ray's path, in
+/// roughly front-to-back order.
+///
+/// This is the widened form of ``enumerate(ray:_:)``. An element binned by its
+/// position alone can straddle a cell the ray's centre line never enters, and
+/// the plain traversal would then skip it. A positive `margin` gathers
+/// candidates from every cell within that world-space distance of the ray — set
+/// it to the largest element extent so nothing reachable is missed. Each
+/// candidate is still reported at most once. A `margin` of zero is exactly
+/// ``enumerate(ray:_:)``.
+///
+/// - Parameters:
+///   - ray: The ray to trace through the grid.
+///   - margin: The world-space radius around the ray to gather candidates from.
+///   - perform: A closure invoked with each candidate element. Return `true`
+///     to continue, or `false` to stop enumeration.
+///
+	@inlinable
+	public func enumerate(ray: Ray<Element.Vector>, margin: Element.Vector.Component, _ perform: (Element) -> Bool) {
 		let dimensions = Element.Vector.count
-		traverse(ray: ray) { coordinate in
-			guard let range = range(for: mortonCode(coordinate, count: dimensions)) else {
+		let radius = cellRadius(for: margin)
+
+		// The centre-line traversal visits each cell once, so no de-duplication is
+		// needed.
+		//
+		guard radius > 0 else {
+			traverse(ray: ray) { coordinate in
+				guard let range = range(for: coordinate, count: dimensions) else {
+					return true
+				}
+				for i in range {
+					guard perform(elements[i]) else {
+						return false
+					}
+				}
+				return true
+			}
+			return
+		}
+
+		// A widened traversal revisits cells where successive neighbourhoods
+		// overlap. Each occupied cell has a unique first-element index, so that
+		// index identifies a cell exactly — even under code collisions — and keeps
+		// every element reported only once.
+		//
+		var visited = Set<Int>()
+		traverse(ray: ray, radius: radius) { coordinate in
+			guard let range = range(for: coordinate, count: dimensions) else {
+				return true
+			}
+			guard visited.insert(range.lowerBound).inserted else {
 				return true
 			}
 			for i in range {
@@ -837,8 +1067,21 @@ extension Grid: RayEnumerable {
 /// example from a ray/sphere test against a particle's radius — along with an
 /// associated result, or nil if the ray misses it. The nearest hit is returned.
 ///
+/// Because elements are binned by their position alone, the default traversal
+/// reports only elements in the cells the ray's centre line crosses. An element
+/// whose geometry has *extent* — a particle with a radius — can straddle a cell
+/// the ray never enters, and would then be missed. Pass a `margin` equal to the
+/// largest such extent to widen the traversal into a tube of that radius,
+/// guaranteeing every element whose geometry comes within `margin` of the ray
+/// is offered. The wider traversal may offer a candidate more than once; the
+/// nearest hit is unaffected. A `margin` of zero (the default) keeps the fast
+/// centre-line traversal, correct when element extent stays within one cell.
+///
 /// - Parameters:
 ///   - ray: The ray to intersect with.
+///   - margin: The world-space radius around the ray to gather candidates from.
+///     Defaults to zero. Set it to the largest element extent for a robust hit
+///     against sized geometry.
 ///   - intersect: A closure returning the hit distance and an associated
 ///     result for an element, or nil if the ray misses it.
 ///
@@ -846,13 +1089,13 @@ extension Grid: RayEnumerable {
 ///   ray misses every element.
 ///
 	@inlinable
-	public func hit<Hit>(ray: Ray<Element.Vector>, _ intersect: (Element) -> (distance: Element.Vector.Component, hit: Hit)?) -> (element: Element, hit: Hit)? {
+	public func hit<Hit>(ray: Ray<Element.Vector>, margin: Element.Vector.Component = 0, _ intersect: (Element) -> (distance: Element.Vector.Component, hit: Hit)?) -> (element: Element, hit: Hit)? {
 		var best: (element: Element, hit: Hit)?
 		var bestDistance = Element.Vector.Component.infinity
 
 		let dimensions = Element.Vector.count
-		traverse(ray: ray) { coordinate in
-			guard let range = range(for: mortonCode(coordinate, count: dimensions)) else {
+		traverse(ray: ray, radius: cellRadius(for: margin)) { coordinate in
+			guard let range = range(for: coordinate, count: dimensions) else {
 				return true
 			}
 			for i in range {
