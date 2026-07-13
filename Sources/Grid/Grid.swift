@@ -971,12 +971,21 @@ extension Grid: RayEnumerable {
 /// anywhere within its cell. A non-positive or non-finite margin needs no
 /// widening.
 ///
+/// The radius is capped at the grid's widest axis: from any cell that already
+/// reaches every other, so a larger margin adds nothing. The cap also keeps the
+/// conversion to `Int` in range for an extreme margin.
+///
 	@inlinable
 	func cellRadius(for margin: Element.Vector.Component) -> Int {
 		guard margin > 0, margin.isFinite else {
 			return 0
 		}
-		return Int((margin / cellSize).rounded(.up)) + 1
+		let widest = resolution.max() ?? 1
+		let cells = (margin / cellSize).rounded(.up)
+		guard cells < Element.Vector.Component(widest) else {
+			return widest
+		}
+		return Int(cells) + 1
 	}
 
 /// Enumerate every element in a cell the ray passes through, in roughly
